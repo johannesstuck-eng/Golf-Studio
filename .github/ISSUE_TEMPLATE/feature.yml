@@ -1,0 +1,41 @@
+name: Feature
+description: Kleine, validierbare Produktverbesserung vorschlagen
+title: "[Feature] "
+labels: ["feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Welches Nutzerproblem wird gelöst und für wen?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Gewünschtes Ergebnis
+      description: Beschreibe den beobachtbaren Outcome, nicht nur die Implementierung.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Akzeptanzkriterien
+      placeholder: "- [ ] ..."
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Nicht-Ziele
+  - type: textarea
+    id: assumptions
+    attributes:
+      label: Annahmen und offene Freigaben
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Vorgeschlagene Priorität
+      options: ["P0 – blockiert Kernpfad", "P1 – nächster MVP-Schritt", "P2 – wertvoll, nicht dringend", "P3 – später prüfen"]
+    validations:
+      required: true

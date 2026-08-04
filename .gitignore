@@ -1,0 +1,14 @@
+node_modules/
+.runtime/
+dist/
+release/
+coverage/
+reports/*.md
+transfer/
+mac-build/
+setup/
+ANLEITUNG.txt
+GOLF ROUND STUDIO STARTEN.cmd
+*.log
+.DS_Store
+Thumbs.db

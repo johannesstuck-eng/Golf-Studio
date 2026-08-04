@@ -1,0 +1,42 @@
+name: Mac Apple Silicon Testversion
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-macos-arm64:
+    runs-on: macos-14
+    permissions:
+      contents: read
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - name: Projekt laden
+        uses: actions/checkout@v4
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Abhängigkeiten für Apple Silicon installieren
+        run: npm ci --include=optional
+
+      - name: Native Medienprogramme prüfen
+        run: |
+          node -e "console.log('FFmpeg:', require('@ffmpeg-installer/ffmpeg').path)"
+          node -e "console.log('ffprobe:', require('@ffprobe-installer/ffprobe').path)"
+
+      - name: DMG und ZIP bauen
+        run: npm run dist:mac:arm64
+
+      - name: Testversion bereitstellen
+        uses: actions/upload-artifact@v4
+        with:
+          name: Golf-Round-Studio-macOS-Apple-Silicon
+          path: |
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+          retention-days: 14
