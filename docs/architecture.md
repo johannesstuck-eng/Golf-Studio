@@ -33,6 +33,7 @@ Tauri bleibt eine sinnvolle spätere Optimierungsoption, wenn gemessene Electron
 - IPC-Kanäle werden explizit in Preload freigegeben.
 - Medienpfade bleiben lokal und werden nicht telemetriert.
 - FFmpeg-Argumente werden als Argumentlisten übergeben, nicht als Shell-Strings.
+- Paketierte Builds verwenden ausschließlich die mitgelieferten FFmpeg-/FFprobe-Dateien unter `app.asar.unpacked`; Umgebungsvariablen und systemweite `PATH`-Treffer werden dort ignoriert.
 - Projektdateien gelten als nicht vertrauenswürdige Eingabe und müssen normalisiert werden.
 - Secrets und Zugangsdaten gehören weder in Projektdateien noch ins Repository.
 

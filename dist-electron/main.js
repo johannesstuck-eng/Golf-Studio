@@ -8,9 +8,17 @@ import { pathToFileURL } from 'node:url';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import ffmpegStatic from 'ffmpeg-static';
 import { assertMediaFilesAreReadable, IpcValidationError, isTrustedAppUrl, validateExportRequest, validateProbePaths, validateProject } from './ipc-validation.js';
+import { createMediaChooseHandler, createMediaEngineDiagnostics, MediaEngineError, publicMediaEngineStatus, resolveMediaEnginePaths, validateDiagnosticsForce } from './media-engine.js';
 const execFileAsync = promisify(execFile);
 const mediaExtensions = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mkv', '.wav', '.mp3', '.m4a', '.aac', '.flac']);
 const audioExtensions = new Set(['.wav', '.mp3', '.m4a', '.aac', '.flac']);
+const mediaEngine = createMediaEngineDiagnostics(resolveMediaEnginePaths({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    environment: process.env,
+    ffmpegPackagePath: ffmpegStatic,
+    ffprobePackagePath: ffprobeInstaller.path,
+}));
 function frameRate(value) {
     if (!value || value === '0/0')
         return null;
@@ -53,19 +61,13 @@ function deviceDetails(filePath, data) {
     const cardHint = path.basename(path.dirname(filePath)).toLowerCase().replace(/[^a-z0-9]+/g, '-');
     return { device, deviceKey: `${normalizedDevice}:${cardHint || sequenceHint || 'media'}` };
 }
-function ffprobePath() {
-    if (process.env.FFPROBE_PATH)
-        return process.env.FFPROBE_PATH;
-    return app.isPackaged ? ffprobeInstaller.path.replace('app.asar', 'app.asar.unpacked') : ffprobeInstaller.path;
-}
-async function probeMedia(filePath) {
+async function probeMedia(filePath, ffprobe) {
     const extension = path.extname(filePath).toLowerCase();
     if (!mediaExtensions.has(extension))
         throw new Error(`Nicht unterstütztes Format: ${extension}`);
     const info = await fs.stat(filePath);
     if (!info.isFile())
         throw new Error('Kein gültiger Medienpfad');
-    const ffprobe = ffprobePath();
     const { stdout } = await execFileAsync(ffprobe, [
         '-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', filePath,
     ], { maxBuffer: 10 * 1024 * 1024, windowsHide: true });
@@ -108,14 +110,9 @@ async function probeMedia(filePath) {
 }
 async function probePaths(paths) {
     const unique = validateProbePaths(paths);
-    const results = await Promise.allSettled(unique.map(probeMedia));
+    const ffprobe = await mediaEngine.require('ffprobe');
+    const results = await Promise.allSettled(unique.map((filePath) => probeMedia(filePath, ffprobe)));
     return results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
-}
-
-function ffmpegPath() {
-    if (process.env.FFMPEG_PATH)
-        return process.env.FFMPEG_PATH;
-    return app.isPackaged ? ffmpegStatic.replace('app.asar', 'app.asar.unpacked') : ffmpegStatic;
 }
 
 function exportMediaForSequence(project, sequence) {
@@ -158,7 +155,8 @@ async function encoderWorks(codec, pixelFormat, videoArgs) {
     if (encoderAvailability.has(cacheKey))
         return encoderAvailability.get(cacheKey);
     try {
-        await execFileAsync(ffmpegPath(), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=128x72:r=30:d=0.05', '-frames:v', '1', '-c:v', codec, ...videoArgs, '-pix_fmt', pixelFormat, '-f', 'null', '-'], { windowsHide: true, timeout: 10000, maxBuffer: 1024 * 1024 });
+        const ffmpeg = await mediaEngine.require('ffmpeg');
+        await execFileAsync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=128x72:r=30:d=0.05', '-frames:v', '1', '-c:v', codec, ...videoArgs, '-pix_fmt', pixelFormat, '-f', 'null', '-'], { windowsHide: true, timeout: 10000, maxBuffer: 1024 * 1024 });
         encoderAvailability.set(cacheKey, true);
         return true;
     }
@@ -405,6 +403,7 @@ function holeCardFilters(project, block, settings, videoLabel, audioLabel) {
 }
 
 async function exportVideo(event, request) {
+    const ffmpeg = await mediaEngine.require('ffmpeg');
     const sequences = request.sequenceIds.map((id) => request.project.sequences.find((sequence) => sequence.id === id)).filter(Boolean);
     const segments = sequences.map((sequence) => ({ sequence, media: exportMediaForSequence(request.project, sequence), block: request.project.blocks.find((block) => block.id === sequence.targetBlockId) })).filter((item) => item.media && item.block);
     if (!segments.length)
@@ -468,7 +467,7 @@ async function exportVideo(event, request) {
             args.push('-movflags', '+faststart');
         args.push('-progress', 'pipe:1', '-nostats', outputPath);
         await new Promise((resolve, reject) => {
-            const child = spawn(ffmpegPath(), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+            const child = spawn(ffmpeg, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
             activeExportProcess = child;
             let stderr = '';
             let progressBuffer = '';
@@ -521,14 +520,26 @@ function registerTrustedHandler(channel, listener) {
     });
 }
 function registerIpc() {
-    registerTrustedHandler('media:choose', async () => {
-        const result = await dialog.showOpenDialog({
+    registerTrustedHandler('media-engine:status', async (_event, forceValue) => {
+        let force;
+        try {
+            force = validateDiagnosticsForce(forceValue);
+        }
+        catch {
+            throw new IpcValidationError('Media-Engine-Diagnose: force muss ein Boolean sein.');
+        }
+        return publicMediaEngineStatus(await mediaEngine.status(force));
+    });
+    const chooseMedia = createMediaChooseHandler({
+        ensureFfprobe: () => mediaEngine.require('ffprobe'),
+        chooseFiles: () => dialog.showOpenDialog({
             title: 'Golf-Aufnahmen importieren',
             properties: ['openFile', 'multiSelections'],
             filters: [{ name: 'Video und Audio', extensions: [...mediaExtensions].map((ext) => ext.slice(1)) }],
-        });
-        return result.canceled ? [] : probePaths(result.filePaths);
+        }),
+        probeFiles: probePaths,
     });
+    registerTrustedHandler('media:choose', chooseMedia);
     registerTrustedHandler('media:probe-paths', (_event, paths) => probePaths(paths));
     registerTrustedHandler('project:save', async (_event, projectValue) => {
         const project = validateProject(projectValue);
@@ -579,7 +590,9 @@ function registerIpc() {
             return await exportVideo(event, request);
         }
         catch (error) {
-            const message = error instanceof IpcValidationError ? error.message : 'Exportanfrage konnte nicht validiert werden.';
+            const message = error instanceof IpcValidationError || error instanceof MediaEngineError
+                ? error.message
+                : 'Exportanfrage konnte nicht validiert werden.';
             return { canceled: false, error: message };
         }
     });
