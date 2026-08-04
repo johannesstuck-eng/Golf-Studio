@@ -32,6 +32,8 @@ Die gebaute Desktop-App kann anschließend mit Electron gestartet werden:
 npm start
 ```
 
+Die App prüft ihre mitgelieferten FFmpeg-/FFprobe-Komponenten vor Import und Export. Erkennungsreihenfolge, Fehlerverhalten und der reproduzierbare Windows-Smoke-Test sind unter [Media-Engine-Diagnose](docs/media-engine-diagnostics.md) dokumentiert.
+
 ## Manueller Orchestrator
 
 Der Orchestrator liest Produktstatus, Roadmap und offene GitHub-Issues und erzeugt einen priorisierten Markdown-Bericht. Er nimmt keine Änderungen an GitHub vor.

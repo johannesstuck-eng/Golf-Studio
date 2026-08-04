@@ -20,6 +20,7 @@ import {
     type GolfBlock,
     type GolfProject,
     type MediaItem,
+    type MediaEngineStatus,
     type MulticamGroup,
     type OverlayPosition,
     type OverlayType,
@@ -164,10 +165,12 @@ function Brand() {
 interface SetupProps {
     onCreate: (settings: ProjectSettings) => void;
     onOpen: () => void;
+    onRetryMediaEngine: () => void;
     error: string;
+    mediaEngineStatus: MediaEngineStatus | null;
 }
 
-function SetupScreen({ onCreate, onOpen, error }: SetupProps) {
+function SetupScreen({ onCreate, onOpen, onRetryMediaEngine, error, mediaEngineStatus }: SetupProps) {
     const [course, setCourse] = useState('');
     const [holes, setHoles] = useState<9 | 18>(9);
     const [players, setPlayers] = useState([{ id: makeId(), name: 'Joe' }, { id: makeId(), name: 'Ferdi' }]);
@@ -182,6 +185,17 @@ function SetupScreen({ onCreate, onOpen, error }: SetupProps) {
             <h1>Welche Runde<br />schneiden wir?</h1>
             <p className="setup-copy">Lege die Golfstruktur einmal an. Die App bereitet Löcher, Spieler und Schlagblöcke automatisch vor.</p>
             {error && <div className="error-banner">{error}</div>}
+            {window.golfStudio && <div className={`media-engine-status ${mediaEngineStatus?.ready ? 'ready' : mediaEngineStatus ? 'error' : 'checking'}`} role={mediaEngineStatus && !mediaEngineStatus.ready ? 'alert' : 'status'}>
+                <ShieldCheck size={16} />
+                <div><b>{mediaEngineStatus?.ready ? 'Media Engine bereit' : mediaEngineStatus ? 'Media Engine nicht verfügbar' : 'Media Engine wird geprüft …'}</b>
+                    <span>{mediaEngineStatus?.ready
+                        ? `FFmpeg ${mediaEngineStatus.ffmpeg.version} · FFprobe ${mediaEngineStatus.ffprobe.version}`
+                        : mediaEngineStatus
+                            ? [mediaEngineStatus.ffmpeg, mediaEngineStatus.ffprobe].find((item) => !item.ready)?.message
+                            : 'Import und Export werden lokal vorbereitet.'}</span>
+                    {mediaEngineStatus && !mediaEngineStatus.ready && <button type="button" className="media-engine-retry" onClick={onRetryMediaEngine}><RotateCcw size={12} /> Erneut prüfen</button>}
+                </div>
+            </div>}
             <label className="field-label" htmlFor="course">Golfplatz</label>
             <div className="input-wrap"><Flag size={18} /><input id="course" value={course} onChange={(event) => setCourse(event.target.value)} placeholder="z. B. GC München Eichenried" autoFocus /></div>
             <div className="setup-row">
@@ -1359,12 +1373,12 @@ function ExportScreen({ project }: { project: GolfProject }) {
     </section>;
 }
 
-function Studio({ initialProject, onNew }: { initialProject: GolfProject; onNew: () => void }) {
+function Studio({ initialProject, onNew, mediaEngineStatus, onRetryMediaEngine }: { initialProject: GolfProject; onNew: () => void; mediaEngineStatus: MediaEngineStatus | null; onRetryMediaEngine: () => void }) {
     const [project, setProject] = useState(initialProject);
     const [screen, setScreen] = useState<StudioScreen>('import');
     const [initialMediaId, setInitialMediaId] = useState<string>();
     const [initialSequenceId, setInitialSequenceId] = useState<string>();
-    const [saveState, setSaveState] = useState('Media Engine bereit');
+    const [saveState, setSaveState] = useState('Projekt lokal');
     const save = async () => {
         if (!window.golfStudio) return setSaveState('Speichern nur in der Desktop-App verfügbar');
         try {
@@ -1386,12 +1400,26 @@ function Studio({ initialProject, onNew }: { initialProject: GolfProject; onNew:
                 ? <RoundBuilder project={project} setProject={setProject} onOpenSequence={openSequence} />
                 : <ExportScreen project={project} />;
     const platformLabel = window.golfStudio?.platform === 'win32' ? 'Windows' : window.golfStudio?.platform === 'darwin' ? 'macOS · Apple Silicon' : window.golfStudio?.platform ?? 'Desktop';
-    return <main className="studio-shell"><TopBar screen={screen} onScreen={navigate} onSave={save} /><Sidebar project={project} screen={screen} onScreen={navigate} onNew={onNew} />{content}<footer className="statusbar"><span><span className="status-dot" /> {saveState}</span><span><HardDrive size={13} /> Lokal · {platformLabel}</span></footer></main>;
+    const engineLabel = mediaEngineStatus?.ready
+        ? `Media Engine · FFmpeg ${mediaEngineStatus.ffmpeg.version}`
+        : mediaEngineStatus ? 'Media Engine nicht verfügbar' : 'Media Engine wird geprüft';
+    return <main className="studio-shell"><TopBar screen={screen} onScreen={navigate} onSave={save} /><Sidebar project={project} screen={screen} onScreen={navigate} onNew={onNew} />{content}<footer className="statusbar"><span><span className="status-dot" /> {saveState}</span><span className={mediaEngineStatus && !mediaEngineStatus.ready ? 'engine-error' : ''}><span className="status-dot" /> {engineLabel}{mediaEngineStatus && !mediaEngineStatus.ready && <button type="button" onClick={onRetryMediaEngine}>Erneut prüfen</button>}</span><span><HardDrive size={13} /> Lokal · {platformLabel}</span></footer></main>;
 }
 
 export default function App() {
     const [project, setProject] = useState<GolfProject | null>(null);
     const [error, setError] = useState('');
+    const [mediaEngineStatus, setMediaEngineStatus] = useState<MediaEngineStatus | null>(null);
+    const checkMediaEngine = useCallback((force = false) => {
+        if (!window.golfStudio) return;
+        setMediaEngineStatus(null);
+        window.golfStudio.getMediaEngineStatus(force)
+            .then(setMediaEngineStatus)
+            .catch(() => setError('Die lokale Media Engine konnte nicht geprüft werden. Bitte Golf Studio neu starten.'));
+    }, []);
+    useEffect(() => {
+        checkMediaEngine();
+    }, [checkMediaEngine]);
     const open = async () => {
         if (!window.golfStudio) return setError('Die Desktop-Brücke ist nicht verfügbar. Bitte die App neu starten.');
         try {
@@ -1400,6 +1428,6 @@ export default function App() {
         } catch (reason) { setError(reason instanceof Error ? reason.message : 'Projekt konnte nicht geöffnet werden.'); }
     };
     return project
-        ? <Studio initialProject={project} onNew={() => setProject(null)} />
-        : <SetupScreen error={error} onOpen={open} onCreate={(settings) => setProject(createProject(settings))} />;
+        ? <Studio initialProject={project} onNew={() => setProject(null)} mediaEngineStatus={mediaEngineStatus} onRetryMediaEngine={() => checkMediaEngine(true)} />
+        : <SetupScreen error={error} onOpen={open} onCreate={(settings) => setProject(createProject(settings))} mediaEngineStatus={mediaEngineStatus} onRetryMediaEngine={() => checkMediaEngine(true)} />;
 }

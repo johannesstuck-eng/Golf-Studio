@@ -1,10 +1,11 @@
-import type { ExportProgress, ExportRequest, GolfProject, MediaItem } from './types';
+import type { ExportProgress, ExportRequest, GolfProject, MediaEngineStatus, MediaItem } from './types';
 
 declare global {
     interface Window {
         golfStudio?: {
             isDesktop: boolean;
             platform: string;
+            getMediaEngineStatus: (force?: boolean) => Promise<MediaEngineStatus>;
             chooseMedia: () => Promise<MediaItem[]>;
             probeDroppedFiles: (files: File[]) => Promise<MediaItem[]>;
             saveProject: (project: GolfProject) => Promise<{ canceled: boolean; path?: string }>;

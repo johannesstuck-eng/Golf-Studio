@@ -60,6 +60,22 @@ export interface ExportProgress {
     outputPath?: string;
 }
 
+export type MediaEngineState = 'ready' | 'missing' | 'not-executable' | 'wrong-binary' | 'incompatible' | 'timed-out' | 'failed';
+
+export interface MediaEngineBinaryStatus {
+    state: MediaEngineState;
+    ready: boolean;
+    source: 'bundled' | 'environment';
+    version?: string;
+    message: string;
+}
+
+export interface MediaEngineStatus {
+    ready: boolean;
+    ffmpeg: MediaEngineBinaryStatus;
+    ffprobe: MediaEngineBinaryStatus;
+}
+
 export interface MulticamSuggestion {
     id: string;
     mediaIds: string[];
