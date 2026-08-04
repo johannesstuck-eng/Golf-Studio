@@ -4,8 +4,10 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { pathToFileURL } from 'node:url';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import ffmpegStatic from 'ffmpeg-static';
+import { assertMediaFilesAreReadable, IpcValidationError, isTrustedAppUrl, validateExportRequest, validateProbePaths, validateProject } from './ipc-validation.js';
 const execFileAsync = promisify(execFile);
 const mediaExtensions = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mkv', '.wav', '.mp3', '.m4a', '.aac', '.flac']);
 const audioExtensions = new Set(['.wav', '.mp3', '.m4a', '.aac', '.flac']);
@@ -105,7 +107,7 @@ async function probeMedia(filePath) {
     };
 }
 async function probePaths(paths) {
-    const unique = [...new Set(paths)];
+    const unique = validateProbePaths(paths);
     const results = await Promise.allSettled(unique.map(probeMedia));
     return results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
 }
@@ -407,6 +409,7 @@ async function exportVideo(event, request) {
     const segments = sequences.map((sequence) => ({ sequence, media: exportMediaForSequence(request.project, sequence), block: request.project.blocks.find((block) => block.id === sequence.targetBlockId) })).filter((item) => item.media && item.block);
     if (!segments.length)
         return { canceled: false, error: 'Keine exportierbaren Sequenzen vorhanden.' };
+    await assertMediaFilesAreReadable({ media: segments.map((segment) => segment.media) });
     const settings = await acceleratedExportSettings(sourceExportSettings(request, segments));
     const result = await dialog.showSaveDialog({ title: 'Golfrunde exportieren', defaultPath: `${request.project.settings.course || 'Golfrunde'}.${settings.extension}`, filters: [{ name: request.profile === 'lossless-master' ? 'Verlustfreier Master' : 'Quellgetreuer Videoexport', extensions: [settings.extension] }] });
     if (result.canceled || !result.filePath)
@@ -507,8 +510,18 @@ async function exportVideo(event, request) {
 
 let activeExportProcess = null;
 let exportWasCanceled = false;
+const productionUrl = pathToFileURL(path.join(import.meta.dirname, '../dist/index.html')).href;
+const developmentUrl = process.env.VITE_DEV_SERVER_URL;
+function registerTrustedHandler(channel, listener) {
+    ipcMain.handle(channel, (event, ...args) => {
+        if (!isTrustedAppUrl(event.senderFrame?.url ?? '', productionUrl, developmentUrl)) {
+            throw new IpcValidationError('IPC-Aufruf von einer nicht vertrauenswürdigen Seite blockiert.');
+        }
+        return listener(event, ...args);
+    });
+}
 function registerIpc() {
-    ipcMain.handle('media:choose', async () => {
+    registerTrustedHandler('media:choose', async () => {
         const result = await dialog.showOpenDialog({
             title: 'Golf-Aufnahmen importieren',
             properties: ['openFile', 'multiSelections'],
@@ -516,8 +529,9 @@ function registerIpc() {
         });
         return result.canceled ? [] : probePaths(result.filePaths);
     });
-    ipcMain.handle('media:probe-paths', (_event, paths) => probePaths(paths));
-    ipcMain.handle('project:save', async (_event, project) => {
+    registerTrustedHandler('media:probe-paths', (_event, paths) => probePaths(paths));
+    registerTrustedHandler('project:save', async (_event, projectValue) => {
+        const project = validateProject(projectValue);
         const result = await dialog.showSaveDialog({
             title: 'Golfprojekt speichern',
             defaultPath: 'Neue Golfrunde.golfcut',
@@ -528,7 +542,7 @@ function registerIpc() {
         await fs.writeFile(result.filePath, JSON.stringify(project, null, 2), 'utf8');
         return { canceled: false, path: result.filePath };
     });
-    ipcMain.handle('project:open', async () => {
+    registerTrustedHandler('project:open', async () => {
         const result = await dialog.showOpenDialog({
             title: 'Golfprojekt öffnen', properties: ['openFile'],
             filters: [{ name: 'Golf Round Studio Projekt', extensions: ['golfcut'] }],
@@ -536,10 +550,15 @@ function registerIpc() {
         if (result.canceled || !result.filePaths[0])
             return { canceled: true };
         const filePath = result.filePaths[0];
+        const info = await fs.stat(filePath);
+        if (!info.isFile() || info.size > 10 * 1024 * 1024)
+            throw new IpcValidationError('Projektdatei ist ungültig oder größer als 10 MB.');
         const project = JSON.parse(await fs.readFile(filePath, 'utf8'));
+        if (project === null || typeof project !== 'object' || Array.isArray(project))
+            throw new IpcValidationError('Projektdatei enthält kein gültiges Projektobjekt.');
         return { canceled: false, path: filePath, project };
     });
-    ipcMain.handle('scorecard:choose', async () => {
+    registerTrustedHandler('scorecard:choose', async () => {
         const result = await dialog.showOpenDialog({
             title: 'Scorecard auswählen',
             properties: ['openFile'],
@@ -551,13 +570,20 @@ function registerIpc() {
             ? { canceled: true }
             : { canceled: false, path: result.filePaths[0] };
     });
-    ipcMain.handle('export:start', (event, request) => {
+    registerTrustedHandler('export:start', async (event, requestValue) => {
         if (activeExportProcess)
             return { canceled: false, error: 'Es läuft bereits ein Export.' };
-        exportWasCanceled = false;
-        return exportVideo(event, request);
+        try {
+            const request = validateExportRequest(requestValue);
+            exportWasCanceled = false;
+            return await exportVideo(event, request);
+        }
+        catch (error) {
+            const message = error instanceof IpcValidationError ? error.message : 'Exportanfrage konnte nicht validiert werden.';
+            return { canceled: false, error: message };
+        }
     });
-    ipcMain.handle('export:cancel', () => {
+    registerTrustedHandler('export:cancel', () => {
         if (!activeExportProcess)
             return { canceled: false };
         exportWasCanceled = true;
@@ -582,6 +608,8 @@ function createWindow() {
             sandbox: true,
         },
     });
+    window.webContents.on('will-navigate', (event) => event.preventDefault());
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     let displayingLoadError = false;
     const showLoadError = (message) => {
         if (displayingLoadError || window.isDestroyed())
@@ -620,7 +648,6 @@ function createWindow() {
             });
         }, 1000);
     });
-    const developmentUrl = process.env.VITE_DEV_SERVER_URL;
     const loadPromise = developmentUrl
         ? window.loadURL(developmentUrl)
         : window.loadFile(path.join(import.meta.dirname, '../dist/index.html'));
