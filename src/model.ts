@@ -548,6 +548,19 @@ export function movePlayerInOrder(project: GolfProject, hole: number, blockOrder
 const start = (media: MediaItem) => Date.parse(media.recordedAt);
 const end = (media: MediaItem) => start(media) + media.durationSeconds * 1000;
 
+function filenameCameraFamily(name: string): string {
+    const stem = name.replace(/\.[^.]+$/, '').toLowerCase();
+    const djiTimestamp = stem.match(/^dji[_-]\d{14,}[_-]\d+(?:[_-]([a-z]))?/);
+    if (djiTimestamp) return `dji-timestamp-${djiTimestamp[1] ?? 'main'}`;
+    if (/^dji[_-]\d{4}(?:[_-]\d+)?$/.test(stem)) return 'dji-classic';
+    const withoutTrailingSegment = stem.replace(/[_-]\d{1,4}$/, '');
+    return withoutTrailingSegment.replace(/[^a-z0-9]+/g, '-') || 'media';
+}
+
+function multicamSourceKey(media: MediaItem): string {
+    return `${media.deviceKey}:${filenameCameraFamily(media.name)}`;
+}
+
 export function overlapMilliseconds(left: MediaItem, right: MediaItem): number {
     const overlap = Math.min(end(left), end(right)) - Math.max(start(left), start(right));
     return Number.isFinite(overlap) ? Math.max(0, overlap) : 0;
@@ -567,12 +580,17 @@ export function suggestMulticam(media: MediaItem[]): MulticamSuggestion[] {
         cluster ? cluster.push(item) : clusters.push([item]);
     }
     return clusters
-        .filter((cluster) => cluster.length > 1 && new Set(cluster.map((item) => item.deviceKey)).size > 1)
+        .filter((cluster) => cluster.length > 1 && new Set(cluster.map(multicamSourceKey)).size > 1)
         .map((cluster, index) => {
             const starts = cluster.map(start);
             const ends = cluster.map(end);
-            const overlapRatio = Math.max(0, Math.min(...ends) - Math.max(...starts))
-                / Math.min(...cluster.map((item) => item.durationSeconds * 1000));
+            const overlapRatios = cluster.flatMap((item, itemIndex) => cluster.slice(itemIndex + 1)
+                .filter((other) => multicamSourceKey(item) !== multicamSourceKey(other))
+                .map((other) => {
+                    const shorter = Math.min(item.durationSeconds, other.durationSeconds) * 1000;
+                    return shorter > 0 ? overlapMilliseconds(item, other) / shorter : 0;
+                }));
+            const overlapRatio = Math.max(0, ...overlapRatios);
             const audioSources = cluster.filter((item) => item.hasAudio || item.kind === 'audio').length;
             const confidence = overlapRatio >= 0.65 && audioSources >= 2 ? 'high' : overlapRatio >= 0.25 ? 'medium' : 'low';
             return {
