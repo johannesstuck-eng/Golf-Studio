@@ -5,6 +5,7 @@ declare global {
         golfStudio?: {
             isDesktop: boolean;
             platform: string;
+            openExternal: (url: string) => Promise<{ opened: boolean }>;
             chooseMedia: () => Promise<MediaItem[]>;
             probeDroppedFiles: (files: File[]) => Promise<MediaItem[]>;
             saveProject: (project: GolfProject) => Promise<{ canceled: boolean; path?: string }>;

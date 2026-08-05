@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -521,6 +521,13 @@ function registerTrustedHandler(channel, listener) {
     });
 }
 function registerIpc() {
+    registerTrustedHandler('external:open', async (_event, value) => {
+        const url = new URL(String(value));
+        if (url.protocol !== 'https:' || url.hostname !== 'github.com' || !url.pathname.startsWith('/johannesstuck-eng/Golf-Studio/'))
+            throw new IpcValidationError('Externer Link wurde blockiert.');
+        await shell.openExternal(url.href);
+        return { opened: true };
+    });
     registerTrustedHandler('media:choose', async () => {
         const result = await dialog.showOpenDialog({
             title: 'Golf-Aufnahmen importieren',
