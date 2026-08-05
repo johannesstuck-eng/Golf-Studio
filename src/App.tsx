@@ -158,7 +158,7 @@ function fileUrl(filePath: string): string {
 }
 
 function Brand() {
-    return <div className="brand"><span className="brand-mark"><Aperture size={20} /></span><span>GOLF ROUND <b>STUDIO</b></span></div>;
+    return <div className="brand"><span className="brand-mark"><Aperture size={20} /></span><span>CUT<b>18</b></span></div>;
 }
 
 interface SetupProps {
