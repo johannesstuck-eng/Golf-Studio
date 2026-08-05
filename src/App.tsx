@@ -8,7 +8,7 @@ import {
 import {
     addBlock, blockLabel, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
     effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence,
-    multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setScorecardSource,
+    multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource,
     suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore,
     updateSequenceOverlay, updateShotTracer, upsertSequence,
 } from './model';
@@ -20,7 +20,9 @@ import {
     type GolfBlock,
     type GolfProject,
     type MediaItem,
+    type MulticamAudioSyncResult,
     type MulticamGroup,
+    type MulticamSyncProgress,
     type OverlayPosition,
     type OverlayType,
     type ProjectSettings,
@@ -249,6 +251,8 @@ function ImportScreen({ project, setProject, onReview }: ImportProps) {
     const [busy, setBusy] = useState(false);
     const [selected, setSelected] = useState<string | null>(null);
     const [message, setMessage] = useState('');
+    const [syncingSuggestionId, setSyncingSuggestionId] = useState<string | null>(null);
+    const [syncProgress, setSyncProgress] = useState<MulticamSyncProgress | null>(null);
     const suggestions = useMemo(() => suggestMulticam(project.media), [project.media]);
     const mergeMedia = (incoming: MediaItem[]) => {
         const known = new Set(project.media.map((media) => media.path.toLowerCase()));
@@ -264,12 +268,32 @@ function ImportScreen({ project, setProject, onReview }: ImportProps) {
         catch (error) { setMessage(error instanceof Error ? error.message : 'Import fehlgeschlagen.'); }
         finally { setBusy(false); }
     };
-    const acceptGroup = (groupId: string) => {
+    const acceptGroup = async (groupId: string) => {
         const suggestion = suggestions.find((item) => item.id === groupId);
         if (!suggestion) return;
         if (project.groups.some((group) => group.mediaIds.length === suggestion.mediaIds.length && group.mediaIds.every((id) => suggestion.mediaIds.includes(id)))) return;
         const group: MulticamGroup = { id: makeId(), name: `Multicam ${project.groups.length + 1}`, mediaIds: suggestion.mediaIds, createdAt: new Date().toISOString(), syncStatus: 'timestamp-only' };
-        setProject({ ...project, groups: [...project.groups, group], modifiedAt: new Date().toISOString() });
+        const withGroup = { ...project, groups: [...project.groups, group], modifiedAt: new Date().toISOString() };
+        setProject(withGroup);
+        if (!window.golfStudio) return;
+        setSyncingSuggestionId(groupId);
+        setMessage('Multicam-Tonspuren werden automatisch synchronisiert …');
+        const unsubscribe = window.golfStudio.onMulticamSyncProgress((progress) => { if (progress.groupId === group.id) setSyncProgress(progress); });
+        try {
+            const media = group.mediaIds.map((id) => withGroup.media.find((item) => item.id === id)).filter((item): item is MediaItem => Boolean(item));
+            const result = await window.golfStudio.syncMulticamAudio({ groupId: group.id, media });
+            const synchronized = Object.keys(result.offsetsSeconds).length >= 2
+                ? setMulticamSyncOffsets(withGroup, group.id, result.offsetsSeconds, 'audio')
+                : withGroup;
+            setProject(synchronized);
+            setMessage(Object.keys(result.offsetsSeconds).length >= 2
+                ? `${group.name} wurde über ${Object.keys(result.offsetsSeconds).length} Tonspuren synchronisiert.`
+                : `${group.name} wurde angelegt. Die Tonspuren waren nicht eindeutig; Zeitstempel bleiben aktiv.`);
+        } catch (error) {
+            setMessage(error instanceof Error ? error.message : 'Die automatische Tonsynchronisierung ist fehlgeschlagen.');
+        } finally {
+            unsubscribe(); setSyncingSuggestionId(null); setSyncProgress(null);
+        }
     };
     return <section className="workspace import-workspace">
         <div className="workspace-heading"><div><div className="eyebrow"><span /> MEDIENIMPORT</div><h1>Rohmaterial hinzufügen</h1><p>Videos und Audiodateien werden nur analysiert – niemals kopiert oder hochgeladen.</p></div>{project.media.length > 0 && <button className="primary" onClick={choose}><Plus size={16} /> Dateien hinzufügen</button>}</div>
@@ -287,12 +311,21 @@ function ImportScreen({ project, setProject, onReview }: ImportProps) {
         </section><aside className="suggestions-panel"><div className="suggestion-title"><WandSparkles size={19} /><div><h3>Multicam-Vorschläge</h3><span>Basierend auf Aufnahmezeiten</span></div></div>{suggestions.length ? suggestions.map((suggestion, index) => {
             const sources = suggestion.mediaIds.map((id) => project.media.find((media) => media.id === id)).filter(Boolean) as MediaItem[];
             const accepted = project.groups.some((group) => group.mediaIds.length === suggestion.mediaIds.length && group.mediaIds.every((id) => suggestion.mediaIds.includes(id)));
-            return <article className="suggestion-card" key={suggestion.id}><div className="confidence"><span className={suggestion.confidence} /> {suggestion.confidence === 'high' ? 'SEHR WAHRSCHEINLICH' : suggestion.confidence === 'medium' ? 'WAHRSCHEINLICH' : 'UNKLAR'}</div><div className="suggestion-name"><span>G{index + 1}</span><div><b>{formatClock(suggestion.startAt)}</b><small>{sources.length} Quellen · {formatDuration((Date.parse(suggestion.endAt) - Date.parse(suggestion.startAt)) / 1000)}</small></div></div><div className="source-stack">{sources.slice(0, 4).map((source) => <span title={source.name} key={source.id}>{source.kind === 'audio' ? <FileAudio size={14} /> : <Camera size={14} />}{source.device.replace('DJI ', '')}</span>)}</div><p>{suggestion.reason}</p><button className={`accept ${accepted ? 'accepted' : ''}`} disabled={accepted} onClick={() => acceptGroup(suggestion.id)}><Check size={15} /> {accepted ? 'Gruppe angelegt' : 'Als Gruppe anlegen'}</button></article>;
+            const synchronizing = syncingSuggestionId === suggestion.id;
+            return <article className="suggestion-card" key={suggestion.id}><div className="confidence"><span className={suggestion.confidence} /> {suggestion.confidence === 'high' ? 'SEHR WAHRSCHEINLICH' : suggestion.confidence === 'medium' ? 'WAHRSCHEINLICH' : 'UNKLAR'}</div><div className="suggestion-name"><span>G{index + 1}</span><div><b>{formatClock(suggestion.startAt)}</b><small>{sources.length} Quellen · {formatDuration((Date.parse(suggestion.endAt) - Date.parse(suggestion.startAt)) / 1000)}</small></div></div><div className="source-stack">{sources.slice(0, 4).map((source) => <span title={source.name} key={source.id}>{source.kind === 'audio' ? <FileAudio size={14} /> : <Camera size={14} />}{source.device.replace('DJI ', '')}</span>)}</div><p>{synchronizing ? syncProgress?.message ?? 'Tonspuren werden vorbereitet …' : suggestion.reason}</p>{synchronizing && <div className="sync-progress"><span style={{ width: `${syncProgress ? syncProgress.completed / Math.max(1, syncProgress.total) * 100 : 8}%` }} /></div>}<button className={`accept ${accepted ? 'accepted' : ''}`} disabled={accepted || Boolean(syncingSuggestionId)} onClick={() => void acceptGroup(suggestion.id)}><Check size={15} /> {synchronizing ? 'Synchronisiere …' : accepted ? 'Gruppe angelegt' : 'Anlegen & automatisch synchronisieren'}</button></article>;
         }) : <div className="empty-suggestions"><Sparkles size={24} /><b>Noch keine Überschneidungen</b><p>Importiere Aufnahmen mehrerer Kameras mit ungefähr gleicher Gerätezeit.</p></div>}</aside></div> : <section className="how-it-works"><div><span>01</span><b>Alles auf einmal importieren</b><p>Osmo, iPhone und Mikrofondateien können gemeinsam ausgewählt werden.</p></div><div><span>02</span><b>Geräte werden erkannt</b><p>Aufnahmezeit, Dauer, Codec, Auflösung und Tonspuren werden lokal ausgelesen.</p></div><div><span>03</span><b>Direkt mit dem Sichten beginnen</b><p>Rohclip öffnen, In und Out markieren und einem Golfblock zuweisen.</p></div></section>}
     </section>;
 }
 
 interface ReviewProps { project: GolfProject; setProject: (project: GolfProject) => void; initialMediaId?: string; initialSequenceId?: string }
+
+function WaveformRow({ label, values, localSeconds, durationSeconds, reference = false }: { label: string; values: number[]; localSeconds: number; durationSeconds: number; reference?: boolean }) {
+    const analyzedDuration = Math.min(600, durationSeconds);
+    const center = values.length ? Math.round(Math.min(1, Math.max(0, localSeconds / Math.max(1, analyzedDuration))) * (values.length - 1)) : 0;
+    const radius = Math.min(90, Math.max(30, Math.round(values.length / Math.max(1, analyzedDuration) * 8)));
+    const windowValues = Array.from({ length: radius * 2 + 1 }, (_, index) => values[center - radius + index] ?? 0);
+    return <div className={`waveform-row ${reference ? 'reference' : ''}`}><div><b>{label}</b><small>{reference ? 'REFERENZ' : `${localSeconds.toFixed(2)} s`}</small></div><div className="waveform-window"><span className="waveform-playhead" />{windowValues.map((value, index) => <i style={{ height: `${Math.max(3, value * 100)}%` }} key={index} />)}</div></div>;
+}
 
 function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }: ReviewProps) {
     const requestedSequence = project.sequences.find((sequence) => sequence.id === initialSequenceId);
@@ -317,6 +350,12 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
     const [targetBlockId, setTargetBlockId] = useState(requestedBlock?.id ?? '');
     const [editingId, setEditingId] = useState<string | undefined>(requestedSequence?.id);
     const [message, setMessage] = useState('');
+    const [syncAnalysis, setSyncAnalysis] = useState<MulticamAudioSyncResult | null>(null);
+    const [syncProgress, setSyncProgress] = useState<MulticamSyncProgress | null>(null);
+    const [syncBusy, setSyncBusy] = useState(false);
+    const [syncOpen, setSyncOpen] = useState(false);
+    const [draftSyncOffset, setDraftSyncOffset] = useState(0);
+    const currentGroup = sourceType === 'group' ? project.groups.find((group) => group.id === sourceId) : undefined;
     const groupTimeline = sourceType === 'group' ? multicamTimeline(project, sourceId) : null;
     const groupMedia = groupTimeline?.media ?? [];
     const source = sourceType === 'media'
@@ -335,11 +374,16 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
         .sort((left, right) => left.order - right.order);
     const matchingBlocks = availableBlocks.filter((block) => block.type === blockType);
     const targetBlock = matchingBlocks.find((block) => block.id === targetBlockId) ?? matchingBlocks[0];
+    const effectiveMediaStartMs = useCallback((media: MediaItem): number => {
+        const stored = multicamMediaStartMs(project, sourceId, media);
+        if (sourceType !== 'group' || media.id !== source?.id) return stored;
+        return stored - (draftSyncOffset - multicamSyncOffset(project, sourceId, media.id)) * 1000;
+    }, [draftSyncOffset, project, source?.id, sourceId, sourceType]);
     const mediaTimeForFrame = useCallback((frame: number, media: MediaItem): number => {
         if (sourceType !== 'group' || !groupTimeline) return frame / fps;
-        const offsetSeconds = (multicamMediaStartMs(project, sourceId, media) - groupTimeline.startMs) / 1000;
+        const offsetSeconds = (effectiveMediaStartMs(media) - groupTimeline.startMs) / 1000;
         return Math.min(media.durationSeconds, Math.max(0, frame / fps - offsetSeconds));
-    }, [fps, groupTimeline, project, sourceId, sourceType]);
+    }, [effectiveMediaStartMs, fps, groupTimeline, sourceType]);
     const seek = useCallback((frame: number) => {
         const target = Math.min(maxFrames, Math.max(0, Math.round(frame)));
         setCurrentFrame(target);
@@ -363,7 +407,26 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
     useEffect(() => {
         if (!matchingBlocks.some((block) => block.id === targetBlockId)) setTargetBlockId(matchingBlocks[0]?.id ?? '');
     }, [matchingBlocks, targetBlockId]);
-    useEffect(() => { if (source) seek(currentFrame); }, [activeMediaId, activeSyncOffset]);
+    useEffect(() => { setDraftSyncOffset(activeSyncOffset); }, [activeMediaId, activeSyncOffset, sourceId]);
+    useEffect(() => { if (source) seek(currentFrame); }, [activeMediaId, draftSyncOffset]);
+    useEffect(() => {
+        if (sourceType !== 'group' || !currentGroup || groupMedia.length < 2 || !window.golfStudio) return;
+        let canceled = false;
+        setSyncBusy(true); setSyncAnalysis(null); setSyncProgress(null);
+        const unsubscribe = window.golfStudio.onMulticamSyncProgress((progress) => { if (!canceled && progress.groupId === sourceId) setSyncProgress(progress); });
+        const media = currentGroup.mediaIds.map((id) => project.media.find((item) => item.id === id)).filter((item): item is MediaItem => Boolean(item));
+        void window.golfStudio.syncMulticamAudio({ groupId: sourceId, media }).then((result) => {
+            if (canceled) return;
+            setSyncAnalysis(result);
+            if (currentGroup.syncStatus === 'timestamp-only' && Object.keys(result.offsetsSeconds).length >= 2) {
+                setProject(setMulticamSyncOffsets(project, sourceId, result.offsetsSeconds, 'audio'));
+                setMessage(`${Object.keys(result.offsetsSeconds).length} Tonspuren automatisch synchronisiert.`);
+            }
+        }).catch((error) => {
+            if (!canceled) setMessage(error instanceof Error ? error.message : 'Tonsynchronisierung fehlgeschlagen.');
+        }).finally(() => { if (!canceled) setSyncBusy(false); });
+        return () => { canceled = true; unsubscribe(); };
+    }, [sourceId, sourceType]);
     useEffect(() => {
         const key = (event: KeyboardEvent) => {
             if ((event.target as HTMLElement)?.matches('input, select, textarea')) return;
@@ -380,7 +443,7 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
     const playRange = () => { seek(inFrame); setPlaySelection(true); window.setTimeout(() => void player()?.play(), 0); };
     const frameFromMediaTime = (media: MediaItem, localSeconds: number) => {
         if (sourceType !== 'group' || !groupTimeline) return Math.round(localSeconds * fps);
-        const offsetSeconds = (multicamMediaStartMs(project, sourceId, media) - groupTimeline.startMs) / 1000;
+        const offsetSeconds = (effectiveMediaStartMs(media) - groupTimeline.startMs) / 1000;
         return Math.round((offsetSeconds + localSeconds) * fps);
     };
     const handleTimeUpdate = (element: HTMLMediaElement, media: MediaItem) => {
@@ -407,19 +470,23 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
         if (!target) return;
         setEditingId(sequence.id); setInFrame(sequence.inFrame); setOutFrame(sequence.outFrame); setHole(target.hole); setPlayerId(target.playerId); setBlockType(target.type); setTargetBlockId(target.id); setActiveMediaId(sequence.activeMediaId ?? ''); seek(sequence.inFrame); setMessage('');
     };
-    const adjustSync = (nextOffset: number) => {
+    const applySyncDraft = () => {
         if (sourceType !== 'group' || !source) return;
         player()?.pause();
-        setProject(setMulticamSyncOffset(project, sourceId, source.id, nextOffset));
-        setMessage(`Synchronisierung für ${source.name}: ${nextOffset >= 0 ? '+' : ''}${nextOffset.toFixed(2)} s`);
+        setProject(setMulticamSyncOffset(project, sourceId, source.id, draftSyncOffset));
+        setMessage(`Feinsynchronisierung für ${source.name} gespeichert.`);
     };
+    const referenceMedia = groupMedia.find((media) => media.id === syncAnalysis?.referenceMediaId);
+    const referenceLocalTime = referenceMedia ? mediaTimeForFrame(currentFrame, referenceMedia) : 0;
+    const activeLocalTime = source ? mediaTimeForFrame(currentFrame, source) : 0;
+    const activeConfidence = source ? syncAnalysis?.confidenceByMediaId[source.id] : undefined;
     return <section className="review-workspace">
         <aside className="source-browser"><div className="source-tabs"><button className={sourceType === 'media' ? 'active' : ''} onClick={() => { setSourceType('media'); setSourceId(project.media[0]?.id ?? ''); }}>Clips</button><button className={sourceType === 'group' ? 'active' : ''} onClick={() => { setSourceType('group'); setSourceId(project.groups[0]?.id ?? ''); }}>Multicam</button></div>
             <div className="source-list">{sourceType === 'media' ? project.media.map((media) => <button className={sourceId === media.id ? 'active' : ''} onClick={() => setSourceId(media.id)} key={media.id}><MediaIcon media={media} /><span><b>{media.name}</b><small>{formatDuration(media.durationSeconds)} · {media.fps ?? '?'} fps</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'media' && sequence.sourceId === media.id).length}</em></button>) : project.groups.map((group) => <button className={sourceId === group.id ? 'active' : ''} onClick={() => setSourceId(group.id)} key={group.id}><div className="group-icon"><Layers size={20} /></div><span><b>{group.name}</b><small>{group.mediaIds.length} Quellen</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'group' && sequence.sourceId === group.id).length}</em></button>)}</div>
         </aside>
         <div className="review-main">{source ? <><div className="review-heading"><div><div className="eyebrow"><span /> SICHTEN & ZUWEISEN</div><h1>{sourceType === 'group' ? project.groups.find((group) => group.id === sourceId)?.name : source.name}</h1><p>{sourceType === 'group' ? `${groupMedia.length} synchronisierte Kameras · aktive Perspektive: ${source.name}` : `${source.device} · ${source.width ?? 'Audio'}${source.height ? `×${source.height}` : ''} · ${fps} fps`}</p></div><div className="keyboard-hints"><kbd>←</kbd><kbd>→</kbd> Frame · <kbd>I</kbd> In · <kbd>O</kbd> Out · <kbd>Leertaste</kbd> Play</div></div>
             {sourceType === 'group' && <div className="camera-monitor-grid">{groupMedia.map((media, index) => <button className={media.id === source.id ? 'active' : ''} onClick={() => { player()?.pause(); setActiveMediaId(media.id); }} key={media.id}><video muted preload="metadata" src={fileUrl(media.path)} ref={(element) => { if (element) previewRefs.current.set(media.id, element); else previewRefs.current.delete(media.id); }} onLoadedMetadata={(event) => { event.currentTarget.currentTime = mediaTimeForFrame(currentFrame, media); }} /><span><b>Kamera {index + 1}</b><small>{media.name} · {media.device}</small></span>{media.id === source.id && <em>AKTIV</em>}</button>)}</div>}
-            {sourceType === 'group' && <div className="multicam-sync-bar"><div><b>Feinsynchronisierung · {source.name}</b><small>Video an einem sichtbaren Ereignis anhalten. „+“ zeigt einen späteren, „−“ einen früheren Moment dieser Kamera.</small></div><div className="sync-step-buttons"><button onClick={() => adjustSync(activeSyncOffset - 1)}>−1 s</button><button onClick={() => adjustSync(activeSyncOffset - .1)}>−0,1 s</button><button onClick={() => adjustSync(activeSyncOffset - 1 / fps)}>−1 Frame</button><output>{activeSyncOffset >= 0 ? '+' : ''}{activeSyncOffset.toFixed(3)} s</output><button onClick={() => adjustSync(activeSyncOffset + 1 / fps)}>+1 Frame</button><button onClick={() => adjustSync(activeSyncOffset + .1)}>+0,1 s</button><button onClick={() => adjustSync(activeSyncOffset + 1)}>+1 s</button><button className="sync-reset" onClick={() => adjustSync(0)}><RotateCcw size={14} /> Null</button></div></div>}
+            {sourceType === 'group' && <section className={`audio-sync-panel ${syncOpen ? 'open' : ''}`}><header><div><b>{syncBusy ? 'Tonspuren werden analysiert …' : currentGroup?.syncStatus === 'audio' ? 'Automatisch über Ton synchronisiert' : currentGroup?.syncStatus === 'manual' ? 'Manuell feinjustiert' : 'Synchronisierung prüfen'}</b><small>{syncBusy ? syncProgress?.message ?? 'Lokale Audioanalyse läuft im Hintergrund.' : `${groupMedia.length} Kameras · ${syncAnalysis?.failures.length ?? 0} Hinweise`}</small></div><div>{activeConfidence && <span className={`sync-confidence ${activeConfidence}`}>{activeConfidence === 'high' ? 'SICHER' : activeConfidence === 'medium' ? 'PRÜFEN' : 'UNSICHER'}</span>}<button onClick={() => setSyncOpen((open) => !open)}>{syncOpen ? 'Schließen' : 'Tonspuren & Finetuning'}</button></div></header>{syncBusy && <div className="sync-progress"><span style={{ width: `${syncProgress ? syncProgress.completed / Math.max(1, syncProgress.total) * 100 : 8}%` }} /></div>}{syncOpen && <div className="audio-sync-editor">{referenceMedia && <WaveformRow label={referenceMedia.name} values={syncAnalysis?.waveforms[referenceMedia.id] ?? []} localSeconds={referenceLocalTime} durationSeconds={referenceMedia.durationSeconds} reference />}{source.id !== referenceMedia?.id && <WaveformRow label={source.name} values={syncAnalysis?.waveforms[source.id] ?? []} localSeconds={activeLocalTime} durationSeconds={source.durationSeconds} />}<div className="sync-slider"><span>FRÜHER</span><input type="range" min={Math.min(-30, draftSyncOffset - 5)} max={Math.max(30, draftSyncOffset + 5)} step={1 / fps} value={draftSyncOffset} disabled={source.id === referenceMedia?.id} onChange={(event) => setDraftSyncOffset(Number(event.target.value))} /><span>SPÄTER</span><output>{draftSyncOffset >= 0 ? '+' : ''}{draftSyncOffset.toFixed(3)} s</output></div><footer><p>{source.id === referenceMedia?.id ? 'Diese Kamera ist die Referenz. Wähle oben eine andere Kamera für das Finetuning.' : 'Ziehe den Regler, bis markante Tonspitzen und das Bildereignis übereinstimmen.'}</p><button disabled={source.id === referenceMedia?.id || draftSyncOffset === (syncAnalysis?.offsetsSeconds[source.id] ?? 0)} onClick={() => setDraftSyncOffset(syncAnalysis?.offsetsSeconds[source.id] ?? 0)}><RotateCcw size={14} /> Automatik</button><button className="primary" disabled={source.id === referenceMedia?.id || draftSyncOffset === activeSyncOffset} onClick={applySyncDraft}><Check size={14} /> Korrektur übernehmen</button></footer></div>}</section>}
             <div className="viewer-shell"><div className="viewer">{source.kind === 'video' ? <video ref={videoRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => handleTimeUpdate(event.currentTarget, source)} onError={() => setMessage('Die Mediendatei konnte nicht geöffnet werden. Prüfe, ob sie noch am gespeicherten Ort liegt.')} /> : <div className="audio-view"><FileAudio size={70} /><b>{source.name}</b><audio ref={audioRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => handleTimeUpdate(event.currentTarget, source)} /></div>}<button className="viewer-play" onClick={togglePlay}>{playing ? <Pause size={25} /> : <Play size={25} />}</button></div>
                 <div className="transport"><button onClick={() => seek(currentFrame - 1)} title="Ein Frame zurück"><ChevronLeft size={20} /></button><button className="transport-play" onClick={togglePlay}>{playing ? <Pause size={18} /> : <Play size={18} />}</button><button onClick={() => seek(currentFrame + 1)} title="Ein Frame vor"><ChevronRight size={20} /></button><strong>{frameTime(currentFrame, fps)}</strong><span>Frame {currentFrame} / {maxFrames}</span></div>
                 <Filmstrip currentFrame={currentFrame} inFrame={inFrame} outFrame={outFrame} maxFrames={maxFrames} sequences={sourceSequences} onSeek={seek} onInChange={(frame) => setInFrame(Math.min(frame, outFrame - 1))} onOutChange={(frame) => setOutFrame(Math.max(frame, inFrame + 1))} />

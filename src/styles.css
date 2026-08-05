@@ -10,45 +10,43 @@
     --muted: #8e9993;
 }
 
-.multicam-sync-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
-    padding: 12px 14px;
-    margin-bottom: 12px;
-    border: 1px solid #27362f;
-    border-radius: 10px;
-    background: #101713;
-}
-.multicam-sync-bar > div:first-child { display: grid; gap: 3px; }
-.multicam-sync-bar b { font-size: 12px; }
-.multicam-sync-bar small { color: #718078; font-size: 10px; }
-.sync-step-buttons { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.sync-step-buttons button {
-    min-height: 30px;
-    padding: 0 10px;
-    border: 1px solid #34453c;
-    border-radius: 7px;
-    background: #17211b;
-    color: #dce7e0;
-    font-weight: 700;
-    cursor: pointer;
-}
-.sync-step-buttons button:hover { border-color: #b7ff39; color: #b7ff39; }
-.sync-step-buttons output {
-    min-width: 68px;
-    color: #b7ff39;
-    text-align: center;
-    font-family: var(--mono);
-    font-size: 12px;
-    font-weight: 800;
-}
-.sync-step-buttons .sync-reset { display: inline-flex; align-items: center; gap: 5px; color: #94a39b; }
+.sync-progress { height: 3px; overflow: hidden; border-radius: 999px; background: #263129; }
+.sync-progress span { display: block; height: 100%; border-radius: inherit; background: #b7ff39; transition: width .25s ease; }
+.audio-sync-panel { margin-bottom: 12px; overflow: hidden; border: 1px solid #27362f; border-radius: 10px; background: #101713; }
+.audio-sync-panel > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 14px; }
+.audio-sync-panel > header > div { display: flex; align-items: center; gap: 9px; }
+.audio-sync-panel > header > div:first-child { display: grid; gap: 2px; }
+.audio-sync-panel > header b { font-size: 12px; }
+.audio-sync-panel > header small { color: #718078; font-size: 10px; }
+.audio-sync-panel > header button { padding: 7px 10px; border: 1px solid #34453c; border-radius: 7px; background: #17211b; color: #dce7e0; font-weight: 750; cursor: pointer; }
+.sync-confidence { padding: 4px 7px; border-radius: 999px; font-size: 9px; font-weight: 900; letter-spacing: .08em; }
+.sync-confidence.high { background: #273d1e; color: #b7ff39; }
+.sync-confidence.medium { background: #40391d; color: #ffd85c; }
+.sync-confidence.low { background: #42231f; color: #ff8c78; }
+.audio-sync-editor { display: grid; gap: 8px; padding: 12px 14px 14px; border-top: 1px solid #27362f; background: #0c120f; }
+.waveform-row { display: grid; grid-template-columns: 190px 1fr; align-items: center; min-height: 55px; border: 1px solid #26352d; border-radius: 8px; background: #111a15; }
+.waveform-row > div:first-child { display: grid; gap: 2px; min-width: 0; padding: 0 12px; }
+.waveform-row b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.waveform-row small { color: #718078; font-size: 9px; font-family: var(--mono); }
+.waveform-row.reference small { color: #b7ff39; font-weight: 850; }
+.waveform-window { position: relative; display: flex; align-items: center; gap: 1px; height: 54px; overflow: hidden; padding: 5px 8px; border-left: 1px solid #26352d; }
+.waveform-window i { flex: 1 1 1px; min-width: 1px; max-height: 100%; border-radius: 1px; background: #61736a; }
+.waveform-row.reference .waveform-window i { background: #7fa633; }
+.waveform-playhead { position: absolute; z-index: 2; top: 0; bottom: 0; left: 50%; width: 1px; background: #f4fff8; box-shadow: 0 0 7px #b7ff39; }
+.sync-slider { display: grid; grid-template-columns: auto 1fr auto 78px; align-items: center; gap: 10px; padding: 9px 4px 2px; }
+.sync-slider span { color: #718078; font-size: 9px; font-weight: 850; letter-spacing: .08em; }
+.sync-slider input { width: 100%; accent-color: #b7ff39; }
+.sync-slider output { color: #b7ff39; text-align: right; font-family: var(--mono); font-size: 12px; font-weight: 850; }
+.audio-sync-editor footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+.audio-sync-editor footer p { margin-right: auto; color: #718078; font-size: 10px; }
+.audio-sync-editor footer button { display: inline-flex; align-items: center; gap: 6px; min-height: 31px; padding: 0 10px; border: 1px solid #34453c; border-radius: 7px; background: #17211b; color: #dce7e0; font-weight: 750; cursor: pointer; }
+.audio-sync-editor footer button:disabled { opacity: .38; cursor: default; }
 
 @media (max-width: 1000px) {
-    .multicam-sync-bar { align-items: stretch; flex-direction: column; }
-    .sync-step-buttons { flex-wrap: wrap; }
+    .waveform-row { grid-template-columns: 130px 1fr; }
+    .audio-sync-panel > header, .audio-sync-editor footer { align-items: stretch; flex-direction: column; }
+    .sync-slider { grid-template-columns: auto 1fr auto; }
+    .sync-slider output { grid-column: 1 / -1; text-align: center; }
 }
 
 * { box-sizing: border-box; }

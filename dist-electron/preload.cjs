@@ -11,6 +11,12 @@ contextBridge.exposeInMainWorld('golfStudio', {
             .filter(Boolean);
         return ipcRenderer.invoke('media:probe-paths', paths);
     },
+    syncMulticamAudio: (request) => ipcRenderer.invoke('multicam:sync-audio', request),
+    onMulticamSyncProgress: (callback) => {
+        const listener = (_event, progress) => callback(progress);
+        ipcRenderer.on('multicam:sync-progress', listener);
+        return () => ipcRenderer.removeListener('multicam:sync-progress', listener);
+    },
     saveProject: (project) => ipcRenderer.invoke('project:save', project),
     openProject: () => ipcRenderer.invoke('project:open'),
     chooseScorecard: () => ipcRenderer.invoke('scorecard:choose'),

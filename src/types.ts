@@ -78,6 +78,29 @@ export interface MulticamGroup {
     syncOffsetsSeconds?: Record<string, number>;
 }
 
+export type MulticamSyncConfidence = 'high' | 'medium' | 'low';
+
+export interface MulticamAudioSyncRequest {
+    groupId: string;
+    media: Array<Pick<MediaItem, 'id' | 'path' | 'recordedAt' | 'durationSeconds' | 'hasAudio'>>;
+}
+
+export interface MulticamAudioSyncResult {
+    groupId: string;
+    referenceMediaId: string | null;
+    offsetsSeconds: Record<string, number>;
+    confidenceByMediaId: Record<string, MulticamSyncConfidence>;
+    waveforms: Record<string, number[]>;
+    failures: string[];
+}
+
+export interface MulticamSyncProgress {
+    groupId: string;
+    completed: number;
+    total: number;
+    message: string;
+}
+
 export interface GolfBlock {
     id: string;
     hole: number;

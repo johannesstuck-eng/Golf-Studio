@@ -7,8 +7,9 @@ import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import ffmpegStatic from 'ffmpeg-static';
-import { assertMediaFilesAreReadable, IpcValidationError, isTrustedAppUrl, validateExportRequest, validateProbePaths, validateProject } from './ipc-validation.js';
+import { assertMediaFilesAreReadable, IpcValidationError, isTrustedAppUrl, validateExportRequest, validateMulticamSyncRequest, validateProbePaths, validateProject } from './ipc-validation.js';
 import { exportMediaForSequence, exportRangeForSequence } from './multicam-export.js';
+import { compactWaveform, confidenceForScore, findAudioSyncOffset, pcm16Envelope } from './audio-sync.js';
 const execFileAsync = promisify(execFile);
 const mediaExtensions = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mkv', '.wav', '.mp3', '.m4a', '.aac', '.flac']);
 const audioExtensions = new Set(['.wav', '.mp3', '.m4a', '.aac', '.flac']);
@@ -111,6 +112,71 @@ async function probePaths(paths) {
     const unique = validateProbePaths(paths);
     const results = await Promise.allSettled(unique.map(probeMedia));
     return results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+}
+
+const audioEnvelopeCache = new Map();
+async function audioEnvelope(media) {
+    const info = await fs.stat(media.path);
+    if (!info.isFile()) throw new Error('Audiodatei ist nicht mehr verfügbar.');
+    const key = `${media.path}:${info.size}:${info.mtimeMs}`;
+    const cached = audioEnvelopeCache.get(key);
+    if (cached) return cached;
+    const seconds = Math.max(5, Math.min(600, media.durationSeconds || 600));
+    const { stdout } = await execFileAsync(ffmpegPath(), [
+        '-nostdin', '-v', 'error', '-i', media.path, '-map', '0:a:0', '-vn',
+        '-ac', '1', '-ar', '2000', '-t', String(seconds), '-f', 's16le', 'pipe:1',
+    ], { encoding: 'buffer', maxBuffer: 32 * 1024 * 1024, windowsHide: true });
+    const envelope = pcm16Envelope(stdout, 2000, 50);
+    if (envelope.length < 250) throw new Error('Tonspur ist für eine Synchronisierung zu kurz.');
+    audioEnvelopeCache.set(key, envelope);
+    if (audioEnvelopeCache.size > 150) audioEnvelopeCache.delete(audioEnvelopeCache.keys().next().value);
+    return envelope;
+}
+
+async function syncMulticamAudio(event, requestValue) {
+    const request = validateMulticamSyncRequest(requestValue);
+    const audioMedia = request.media.filter((media) => media.hasAudio);
+    const result = { groupId: request.groupId, referenceMediaId: null, offsetsSeconds: {}, confidenceByMediaId: {}, waveforms: {}, failures: [] };
+    if (audioMedia.length < 2) {
+        result.failures.push('Für die automatische Synchronisierung werden mindestens zwei Tonspuren benötigt.');
+        return result;
+    }
+    const reference = [...audioMedia].sort((left, right) => right.durationSeconds - left.durationSeconds)[0];
+    result.referenceMediaId = reference.id;
+    const total = audioMedia.length;
+    let completed = 0;
+    const report = (message) => event.sender.send('multicam:sync-progress', { groupId: request.groupId, completed, total, message });
+    report(`Referenzton wird analysiert: ${path.basename(reference.path)}`);
+    let referenceEnvelope;
+    try {
+        referenceEnvelope = await audioEnvelope(reference);
+        result.offsetsSeconds[reference.id] = 0;
+        result.confidenceByMediaId[reference.id] = 'high';
+        result.waveforms[reference.id] = compactWaveform(referenceEnvelope, 6000);
+        completed += 1;
+    } catch (error) {
+        result.failures.push(`${reference.id}: ${error instanceof Error ? error.message : 'Tonspur konnte nicht gelesen werden.'}`);
+        return result;
+    }
+    for (const media of audioMedia) {
+        if (media.id === reference.id) continue;
+        report(`Tonspuren werden abgeglichen (${completed + 1}/${total})`);
+        try {
+            const envelope = await audioEnvelope(media);
+            const rawDifference = (Date.parse(media.recordedAt) - Date.parse(reference.recordedAt)) / 1000;
+            const match = findAudioSyncOffset(referenceEnvelope, envelope, rawDifference, 50, 15);
+            const confidence = confidenceForScore(match.score, match.overlapSeconds);
+            result.waveforms[media.id] = compactWaveform(envelope, 6000);
+            result.confidenceByMediaId[media.id] = confidence;
+            if (confidence !== 'low') result.offsetsSeconds[media.id] = match.offsetSeconds;
+            else result.failures.push(`${media.id}: Keine eindeutige Übereinstimmung der Tonspuren.`);
+        } catch (error) {
+            result.failures.push(`${media.id}: ${error instanceof Error ? error.message : 'Tonspur konnte nicht gelesen werden.'}`);
+        }
+        completed += 1;
+    }
+    report('Tonspuren wurden analysiert.');
+    return result;
 }
 
 function ffmpegPath() {
@@ -533,6 +599,7 @@ function registerIpc() {
         return result.canceled ? [] : probePaths(result.filePaths);
     });
     registerTrustedHandler('media:probe-paths', (_event, paths) => probePaths(paths));
+    registerTrustedHandler('multicam:sync-audio', (event, request) => syncMulticamAudio(event, request));
     registerTrustedHandler('project:save', async (_event, projectValue) => {
         const project = validateProject(projectValue);
         const result = await dialog.showSaveDialog({

@@ -84,6 +84,26 @@ export function validateLocalMediaPath(value, location = 'Medienpfad') {
     return path.normalize(filePath);
 }
 
+export function validateMulticamSyncRequest(value) {
+    const request = record(value, 'multicamSync');
+    string(request.groupId, 'multicamSync.groupId', 128);
+    const media = array(request.media, 'multicamSync.media', limits.media);
+    if (media.length < 2) fail('multicamSync.media', 'Mindestens zwei Medien erwartet.');
+    const ids = new Set();
+    media.forEach((value, index) => {
+        const item = record(value, `multicamSync.media[${index}]`);
+        const id = string(item.id, `multicamSync.media[${index}].id`, 128);
+        if (ids.has(id)) fail('multicamSync.media', 'Doppelte Medien-IDs sind nicht erlaubt.');
+        ids.add(id);
+        validateLocalMediaPath(item.path, `multicamSync.media[${index}].path`);
+        const recordedAt = string(item.recordedAt, `multicamSync.media[${index}].recordedAt`, 64);
+        if (!Number.isFinite(Date.parse(recordedAt))) fail(`multicamSync.media[${index}].recordedAt`, 'Ungültiger Aufnahmezeitpunkt.');
+        finite(item.durationSeconds, `multicamSync.media[${index}].durationSeconds`, 0, 24 * 60 * 60);
+        boolean(item.hasAudio, `multicamSync.media[${index}].hasAudio`);
+    });
+    return request;
+}
+
 function validateMedia(value, index) {
     const item = record(value, `project.media[${index}]`);
     string(item.id, `project.media[${index}].id`, 128);

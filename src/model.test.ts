@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, setMulticamSyncOffset, setScorecardSource, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence } from './model';
+import { addBlock, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence } from './model';
 import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
@@ -163,6 +163,8 @@ describe('project model', () => {
             { mediaId: 'reference', inFrame: 60, outFrame: 300, sourceFps: 30 },
             { mediaId: 'late-content', inFrame: 105, outFrame: 345, sourceFps: 30 },
         ]);
+        const automatic = setMulticamSyncOffsets(groupProject, 'group', { reference: 0, 'late-content': 1.5 }, 'audio');
+        expect(automatic.groups[0]).toMatchObject({ syncStatus: 'audio', syncOffsetsSeconds: { reference: 0, 'late-content': 1.5 } });
     });
 
     it('stores course, scorecard, score and shot metadata', () => {

@@ -610,15 +610,18 @@ export function multicamAnglesForRange(project: GolfProject, groupId: string, in
     });
 }
 
-export function setMulticamSyncOffset(project: GolfProject, groupId: string, mediaId: string, seconds: number): GolfProject {
+export function setMulticamSyncOffsets(project: GolfProject, groupId: string, offsets: Record<string, number>, syncStatus: 'manual' | 'audio'): GolfProject {
     const group = project.groups.find((item) => item.id === groupId);
-    if (!group || !group.mediaIds.includes(mediaId) || !Number.isFinite(seconds)) return project;
-    const rounded = Math.min(3600, Math.max(-3600, Math.round(seconds * 1000) / 1000));
+    if (!group) return project;
+    const validOffsets = Object.fromEntries(Object.entries(offsets)
+        .filter(([mediaId, seconds]) => group.mediaIds.includes(mediaId) && Number.isFinite(seconds))
+        .map(([mediaId, seconds]) => [mediaId, Math.min(3600, Math.max(-3600, Math.round(seconds * 1000) / 1000))]));
+    if (!Object.keys(validOffsets).length) return project;
     const now = new Date().toISOString();
     const groups = project.groups.map((item) => item.id === groupId ? {
         ...item,
-        syncStatus: 'manual' as const,
-        syncOffsetsSeconds: { ...(item.syncOffsetsSeconds ?? {}), [mediaId]: rounded },
+        syncStatus,
+        syncOffsetsSeconds: { ...(item.syncOffsetsSeconds ?? {}), ...validOffsets },
     } : item);
     const next = { ...project, schemaVersion: 8, groups, modifiedAt: now };
     return {
@@ -629,6 +632,10 @@ export function setMulticamSyncOffset(project: GolfProject, groupId: string, med
             updatedAt: now,
         } : sequence),
     };
+}
+
+export function setMulticamSyncOffset(project: GolfProject, groupId: string, mediaId: string, seconds: number): GolfProject {
+    return setMulticamSyncOffsets(project, groupId, { [mediaId]: seconds }, 'manual');
 }
 
 function filenameCameraFamily(name: string): string {
