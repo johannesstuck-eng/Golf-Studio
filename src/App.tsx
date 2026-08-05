@@ -40,9 +40,10 @@ import { EDITORIAL_STYLE, editorialTransition, scoreBeforeHole } from './editori
 import { createTracerFlight, insertTracerIntermediate } from './tracerWorkflow';
 import { lockTracerPointsToWorld, screenToWorld, svgCameraMatrix, worldToScreen } from './cameraLock';
 import { Dashboard } from './AgentDashboard';
+import { firstSequenceForHole, summarizeRoundDesk, type HoleStoryStatus } from './roundDesk';
 
 const makeId = () => crypto.randomUUID();
-type StudioScreen = 'import' | 'review' | 'build' | 'export';
+type StudioScreen = 'round' | 'import' | 'review' | 'build' | 'export';
 type TracerWorkflowStep = 'impact-frame' | 'impact-point' | 'landing-frame' | 'landing-point' | 'intermediate-frame' | 'intermediate-point' | 'edit';
 type CameraLockStep = 'impact-a' | 'impact-b' | 'landing-a' | 'landing-b';
 
@@ -217,10 +218,11 @@ function OptionButtons({ label, values, labels, value, onChange, suffix = '' }: 
     return <div><span className="field-label">{label}</span><div className={`segmented columns-${values.length}`}>{values.map((item, index) => <button type="button" className={value === item ? 'active' : ''} onClick={() => onChange(item)} key={item}>{labels?.[index] ?? item}{suffix}</button>)}</div></div>;
 }
 
-function TopBar({ screen, onScreen, onSave, onDashboard }: { screen: StudioScreen; onScreen: (value: StudioScreen) => void; onSave: () => void; onDashboard: () => void }) {
+function TopBar({ project, screen, onScreen, onSave, onDashboard }: { project: GolfProject; screen: StudioScreen; onScreen: (value: StudioScreen) => void; onSave: () => void; onDashboard: () => void }) {
     return <header className="topbar"><Brand /><nav className="steps">
-        <button className={screen === 'import' ? 'active' : 'done'} onClick={() => onScreen('import')}><b>1</b> Import</button><i />
-        <button className={screen === 'review' ? 'active' : screen === 'build' || screen === 'export' ? 'done' : ''} onClick={() => onScreen('review')}><b>2</b> Sichten</button><i />
+        <button className={screen === 'round' ? 'active round-step' : 'round-step'} onClick={() => onScreen('round')}><Flag size={14} /> Round Desk</button><i />
+        <button className={screen === 'import' ? 'active' : project.media.length ? 'done' : ''} onClick={() => onScreen('import')}><b>1</b> Import</button><i />
+        <button className={screen === 'review' ? 'active' : project.sequences.length ? 'done' : ''} onClick={() => onScreen('review')}><b>2</b> Sichten</button><i />
         <button className={screen === 'build' ? 'active' : screen === 'export' ? 'done' : ''} onClick={() => onScreen('build')}><b>3</b> Runde bauen</button><i /><button className={screen === 'export' ? 'active' : ''} onClick={() => onScreen('export')}><b>4</b> Export</button>
     </nav><div className="top-actions"><button className="icon-button" title="Mission Control" onClick={onDashboard}><LayoutDashboard size={18} /></button><button className="icon-button" title="Hilfe"><CircleHelp size={19} /></button><button className="secondary" onClick={onSave}><Save size={16} /> Speichern</button></div></header>;
 }
@@ -229,6 +231,7 @@ function Sidebar({ project, screen, onScreen, onNew }: { project: GolfProject; s
     return <aside className="sidebar">
         <div className="project-summary"><span>AKTUELLES PROJEKT</span><h2>{project.settings.course}</h2><p>{project.settings.holes} Loch · {project.settings.players.map((player) => player.name).join(' & ')}</p></div>
         <div className="side-section"><div className="side-label">PROJEKT</div>
+            <button className={`side-link ${screen === 'round' ? 'active' : ''}`} onClick={() => onScreen('round')}><Film size={17} /> Round Desk <span>{project.settings.holes}</span></button>
             <button className={`side-link ${screen === 'import' ? 'active' : ''}`} onClick={() => onScreen('import')}><Import size={17} /> Medienimport <span>{project.media.length || ''}</span></button>
             <button className={`side-link ${screen === 'review' ? 'active' : ''}`} onClick={() => onScreen('review')}><Scissors size={17} /> Sichten <span>{project.sequences.length || ''}</span></button>
             <button className={`side-link ${screen === 'build' ? 'active' : ''}`} onClick={() => onScreen('build')}><LayoutGrid size={17} /> Runde bauen <span>{project.settings.holes}</span></button>
@@ -317,7 +320,7 @@ function ImportScreen({ project, setProject, onReview }: ImportProps) {
     </section>;
 }
 
-interface ReviewProps { project: GolfProject; setProject: (project: GolfProject) => void; initialMediaId?: string; initialSequenceId?: string }
+interface ReviewProps { project: GolfProject; setProject: (project: GolfProject) => void; initialMediaId?: string; initialSequenceId?: string; initialHole?: number }
 
 function WaveformRow({ label, values, localSeconds, durationSeconds, reference = false }: { label: string; values: number[]; localSeconds: number; durationSeconds: number; reference?: boolean }) {
     const analyzedDuration = Math.min(600, durationSeconds);
@@ -327,7 +330,7 @@ function WaveformRow({ label, values, localSeconds, durationSeconds, reference =
     return <div className={`waveform-row ${reference ? 'reference' : ''}`}><div><b>{label}</b><small>{reference ? 'REFERENZ' : `${localSeconds.toFixed(2)} s`}</small></div><div className="waveform-window"><span className="waveform-playhead" />{windowValues.map((value, index) => <i style={{ height: `${Math.max(3, value * 100)}%` }} key={index} />)}</div></div>;
 }
 
-function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }: ReviewProps) {
+function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId, initialHole }: ReviewProps) {
     const requestedSequence = project.sequences.find((sequence) => sequence.id === initialSequenceId);
     const requestedBlock = project.blocks.find((block) => block.id === requestedSequence?.targetBlockId);
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -344,7 +347,7 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
     const [outFrame, setOutFrame] = useState(requestedSequence?.outFrame ?? 1);
     const [playing, setPlaying] = useState(false);
     const [playSelection, setPlaySelection] = useState(false);
-    const [hole, setHole] = useState(requestedBlock?.hole ?? 1);
+    const [hole, setHole] = useState(requestedBlock?.hole ?? initialHole ?? 1);
     const [playerId, setPlayerId] = useState(requestedBlock?.playerId ?? project.settings.players[0]?.id ?? '');
     const [blockType, setBlockType] = useState<BlockType>(requestedBlock?.type ?? 'tee-shot');
     const [targetBlockId, setTargetBlockId] = useState(requestedBlock?.id ?? '');
@@ -490,11 +493,13 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
     const referenceLocalTime = referenceMedia ? mediaTimeForFrame(currentFrame, referenceMedia) : 0;
     const activeLocalTime = source ? mediaTimeForFrame(currentFrame, source) : 0;
     const activeConfidence = source ? syncAnalysis?.confidenceByMediaId[source.id] : undefined;
+    const contextSummary = summarizeRoundDesk(project);
+    const contextHoleSummary = contextSummary.holes.find((item) => item.hole === hole);
     return <section className="review-workspace">
         <aside className="source-browser"><div className="source-tabs"><button className={sourceType === 'media' ? 'active' : ''} onClick={() => { setSourceType('media'); setSourceId(project.media[0]?.id ?? ''); }}>Clips</button><button className={sourceType === 'group' ? 'active' : ''} onClick={() => { setSourceType('group'); setSourceId(project.groups[0]?.id ?? ''); }}>Multicam</button></div>
             <div className="source-list">{sourceType === 'media' ? project.media.map((media) => <button className={sourceId === media.id ? 'active' : ''} onClick={() => setSourceId(media.id)} key={media.id}><MediaIcon media={media} /><span><b>{media.name}</b><small>{formatDuration(media.durationSeconds)} · {media.fps ?? '?'} fps</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'media' && sequence.sourceId === media.id).length}</em></button>) : project.groups.map((group) => <button className={sourceId === group.id ? 'active' : ''} onClick={() => setSourceId(group.id)} key={group.id}><div className="group-icon"><Layers size={20} /></div><span><b>{group.name}</b><small>{group.mediaIds.length} Quellen</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'group' && sequence.sourceId === group.id).length}</em></button>)}</div>
         </aside>
-        <div className="review-main">{source ? <><div className="review-heading"><div><div className="eyebrow"><span /> SICHTEN & ZUWEISEN</div><h1>{sourceType === 'group' ? project.groups.find((group) => group.id === sourceId)?.name : source.name}</h1><p>{sourceType === 'group' ? `${visibleGroupMedia.length || groupMedia.length} Kameras am aktuellen Zeitpunkt · aktive Perspektive: ${source.name}` : `${source.device} · ${source.width ?? 'Audio'}${source.height ? `×${source.height}` : ''} · ${fps} fps`}</p></div><div className="keyboard-hints"><kbd>←</kbd><kbd>→</kbd> Frame · <kbd>I</kbd> In · <kbd>O</kbd> Out · <kbd>Leertaste</kbd> Play</div></div>
+        <div className="review-main">{source ? <>{contextHoleSummary && <div className="moment-round-context"><span>ROUND CUT {contextSummary.progress}%</span><i /><b>LOCH {contextHoleSummary.hole}</b><small>{ROUND_STATUS_COPY[contextHoleSummary.status]}</small></div>}<div className="review-heading"><div><div className="eyebrow"><span /> SICHTEN & ZUWEISEN</div><h1>{sourceType === 'group' ? project.groups.find((group) => group.id === sourceId)?.name : source.name}</h1><p>{sourceType === 'group' ? `${visibleGroupMedia.length || groupMedia.length} Kameras am aktuellen Zeitpunkt · aktive Perspektive: ${source.name}` : `${source.device} · ${source.width ?? 'Audio'}${source.height ? `×${source.height}` : ''} · ${fps} fps`}</p></div><div className="keyboard-hints"><kbd>←</kbd><kbd>→</kbd> Frame · <kbd>I</kbd> In · <kbd>O</kbd> Out · <kbd>Leertaste</kbd> Play</div></div>
             {sourceType === 'group' && <div className="camera-monitor-grid">{(visibleGroupMedia.length ? visibleGroupMedia : groupMedia.slice(0, 4)).map((media) => <button className={media.id === source.id ? 'active' : ''} onClick={() => { player()?.pause(); setActiveMediaId(media.id); }} key={media.id}><video muted preload="metadata" src={fileUrl(media.path)} ref={(element) => { if (element) previewRefs.current.set(media.id, element); else previewRefs.current.delete(media.id); }} onLoadedMetadata={(event) => { event.currentTarget.currentTime = mediaTimeForFrame(currentFrame, media); }} /><span><b>{media.device}</b><small>{media.name}</small></span>{media.id === source.id && <em>AKTIV</em>}</button>)}</div>}
             {sourceType === 'group' && <section className={`audio-sync-panel ${syncOpen ? 'open' : ''}`}><header><div><b>{syncBusy ? 'Tonspuren werden analysiert …' : currentGroup?.syncStatus === 'audio' ? 'Automatisch über Ton synchronisiert' : currentGroup?.syncStatus === 'manual' ? 'Manuell feinjustiert' : 'Synchronisierung prüfen'}</b><small>{syncBusy ? syncProgress?.message ?? 'Lokale Audioanalyse läuft im Hintergrund.' : `${groupMedia.length} Kameras · ${syncAnalysis?.failures.length ?? 0} Hinweise`}</small></div><div>{activeConfidence && <span className={`sync-confidence ${activeConfidence}`}>{activeConfidence === 'high' ? 'SICHER' : activeConfidence === 'medium' ? 'PRÜFEN' : 'UNSICHER'}</span>}<button onClick={() => setSyncOpen((open) => !open)}>{syncOpen ? 'Schließen' : 'Tonspuren & Finetuning'}</button></div></header>{syncBusy && <div className="sync-progress"><span style={{ width: `${syncProgress ? syncProgress.completed / Math.max(1, syncProgress.total) * 100 : 8}%` }} /></div>}{syncOpen && <div className="audio-sync-editor">{referenceMedia && <WaveformRow label={referenceMedia.name} values={syncAnalysis?.waveforms[referenceMedia.id] ?? []} localSeconds={referenceLocalTime} durationSeconds={referenceMedia.durationSeconds} reference />}{source.id !== referenceMedia?.id && <WaveformRow label={source.name} values={syncAnalysis?.waveforms[source.id] ?? []} localSeconds={activeLocalTime} durationSeconds={source.durationSeconds} />}<div className="sync-slider"><span>FRÜHER</span><input type="range" min={Math.min(-30, draftSyncOffset - 5)} max={Math.max(30, draftSyncOffset + 5)} step={1 / fps} value={draftSyncOffset} disabled={source.id === referenceMedia?.id} onChange={(event) => setDraftSyncOffset(Number(event.target.value))} /><span>SPÄTER</span><output>{draftSyncOffset >= 0 ? '+' : ''}{draftSyncOffset.toFixed(3)} s</output></div><footer><p>{source.id === referenceMedia?.id ? 'Diese Kamera ist die Referenz. Wähle oben eine andere Kamera für das Finetuning.' : 'Ziehe den Regler, bis markante Tonspitzen und das Bildereignis übereinstimmen.'}</p><button disabled={source.id === referenceMedia?.id || draftSyncOffset === (syncAnalysis?.offsetsSeconds[source.id] ?? 0)} onClick={() => setDraftSyncOffset(syncAnalysis?.offsetsSeconds[source.id] ?? 0)}><RotateCcw size={14} /> Automatik</button><button className="primary" disabled={source.id === referenceMedia?.id || draftSyncOffset === activeSyncOffset} onClick={applySyncDraft}><Check size={14} /> Korrektur übernehmen</button></footer></div>}</section>}
             <div className="viewer-shell"><div className="viewer">{source.kind === 'video' ? <video ref={videoRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => handleTimeUpdate(event.currentTarget, source)} onError={() => setMessage('Die Mediendatei konnte nicht geöffnet werden. Prüfe, ob sie noch am gespeicherten Ort liegt.')} /> : <div className="audio-view"><FileAudio size={70} /><b>{source.name}</b><audio ref={audioRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => handleTimeUpdate(event.currentTarget, source)} /></div>}<button className="viewer-play" onClick={togglePlay}>{playing ? <Pause size={25} /> : <Play size={25} />}</button></div>
@@ -1360,6 +1365,78 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
     </section></div>;
 }
 
+const ROUND_STATUS_COPY: Record<HoleStoryStatus, string> = {
+    empty: 'Noch offen',
+    started: 'Story angelegt',
+    'story-ready': 'Im Film',
+};
+
+function RoundDesk({ project, setProject, onNavigate, onOpenSequence, onStartHole }: { project: GolfProject; setProject: (project: GolfProject) => void; onNavigate: (screen: StudioScreen) => void; onOpenSequence: (sequenceId: string) => void; onStartHole: (hole: number) => void }) {
+    const [selectedHole, setSelectedHole] = useState<number>();
+    const [previewOpen, setPreviewOpen] = useState(false);
+    const backRef = useRef<HTMLButtonElement>(null);
+    const holeRefs = useRef(new Map<number, HTMLButtonElement>());
+    const summary = useMemo(() => summarizeRoundDesk(project), [project]);
+    const selected = selectedHole ? summary.holes.find((hole) => hole.hole === selectedHole) : undefined;
+    const blocks = selectedHole
+        ? project.blocks.filter((block) => block.hole === selectedHole).sort((left, right) => left.order - right.order)
+        : [];
+    const openFirstMoment = () => {
+        if (!selectedHole) return;
+        const sequenceId = firstSequenceForHole(project, selectedHole);
+        if (sequenceId) onOpenSequence(sequenceId);
+        else if (project.media.length) onStartHole(selectedHole);
+        else onNavigate('import');
+    };
+    useEffect(() => {
+        if (selectedHole) window.requestAnimationFrame(() => backRef.current?.focus());
+    }, [selectedHole]);
+    const backToRound = () => {
+        const previousHole = selectedHole;
+        setSelectedHole(undefined);
+        window.requestAnimationFrame(() => previousHole && holeRefs.current.get(previousHole)?.focus());
+    };
+    if (selected) {
+        const holeData = project.courseData.holes.find((hole) => hole.number === selected.hole);
+        return <section className="workspace round-desk hole-story-view">
+            <header className="hole-story-header">
+                <button ref={backRef} className="round-back" onClick={backToRound}><ChevronLeft size={16} /> Zurück zur Runde</button>
+                <div className="hole-story-kicker"><span>HOLE STORY</span><i />{ROUND_STATUS_COPY[selected.status]} <strong>ROUND CUT {summary.progress}%</strong></div>
+                <div className="hole-story-title"><div><span>{String(selected.hole).padStart(2, '0')}</span><small>PAR {selected.par}</small></div><div><h1>Die Geschichte<br />dieses Lochs.</h1><p>{holeData?.lengthMeters ? `${holeData.lengthMeters} Meter · ` : ''}{selected.sequenceCount} Momente · {formatDuration(selected.durationSeconds)} im Rohschnitt</p></div></div>
+                <button className="primary hole-story-action" onClick={openFirstMoment}>{selected.sequenceCount ? <><Play size={16} /> Ersten Moment öffnen</> : project.media.length ? <><Scissors size={16} /> Momente aus Material bauen</> : <><Import size={16} /> Material importieren</>}</button>
+            </header>
+            <div className="story-strip-heading"><div><span>STORY MOMENTS</span><h2>Vom Abschlag bis zum letzten Putt</h2></div><p>Keine starre Timeline: Jeder Moment gehört zu seiner Rolle in der Golfgeschichte.</p></div>
+            <div className="story-moment-strip">
+                {blocks.map((block, index) => {
+                    const sequences = block.sequenceIds.filter((id) => project.sequences.some((sequence) => sequence.id === id));
+                    return <article className={`story-moment ${sequences.length ? 'filled' : ''}`} key={block.id}>
+                        <span className="story-moment-index">{String(index + 1).padStart(2, '0')}</span>
+                        <div className="story-moment-line"><i /></div>
+                        <div><small>{project.settings.players.find((player) => player.id === block.playerId)?.name ?? 'Spieler'}</small><h3>{blockLabel(block.type)}</h3><p>{sequences.length ? `${sequences.length} ${sequences.length === 1 ? 'Aufnahme' : 'Aufnahmen'} bereit` : 'Noch ohne Aufnahme'}</p></div>
+                        {sequences.length ? <button onClick={() => onOpenSequence(sequences[0])} aria-label={`${blockLabel(block.type)} im Editor öffnen`}><ChevronRight size={16} /></button> : <span className="story-planned">GEPLANT</span>}
+                    </article>;
+                })}
+            </div>
+            <aside className="story-truth-note"><Sparkles size={16} /><div><b>Editorial Pass</b><p>Overlays, Shot-Tracer und Feinschnitt bleiben bewusst im vorhandenen Moment-Editor. Ein automatischer Story-Pass ist noch nicht verfügbar.</p></div></aside>
+        </section>;
+    }
+    return <section className="workspace round-desk">
+        <header className="round-desk-hero">
+            <div><div className="eyebrow"><span /> THE ROUND DESK</div><h1>Deine Runde.<br /><em>Als Film gedacht.</em></h1><p>Der komplette Golf-Film auf einen Blick. Wähle ein Loch, um seine Momente zu formen – nicht seine Spuren zu verwalten.</p></div>
+            <div className="round-reel" role="progressbar" aria-label="Fortschritt des Rundenfilms" aria-valuemin={0} aria-valuemax={100} aria-valuenow={summary.progress}><div><strong>{summary.progress}<small>%</small></strong><span>ROUND CUT</span></div><svg viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="52" /><circle className="progress" cx="60" cy="60" r="52" pathLength="100" strokeDasharray={`${summary.progress} 100`} /></svg></div>
+        </header>
+        <div className="round-desk-summary"><span><b>{summary.completedHoles}</b> Löcher im Film</span><span><b>{summary.sequenceCount}</b> Story-Momente</span><span><b>{formatDuration(summary.durationSeconds)}</b> Rohschnitt</span><button className="secondary" disabled={!summary.sequenceCount} onClick={() => setPreviewOpen(true)}><MonitorPlay size={15} /> Ganze Runde ansehen</button></div>
+        <div className="round-map-heading"><div><span>ROUND MAP · {project.settings.holes} HOLES</span><h2>{project.settings.course}</h2></div><div className="round-map-legend"><span><i className="ready" /> Im Film</span><span><i className="started" /> Angelegt</span><span><i /> Offen</span></div></div>
+        <div className={`round-map holes-${project.settings.holes}`}>
+            {summary.holes.map((hole, index) => <button ref={(element) => { if (element) holeRefs.current.set(hole.hole, element); else holeRefs.current.delete(hole.hole); }} className={`round-hole ${hole.status} route-${index % 5}`} onClick={() => setSelectedHole(hole.hole)} key={hole.hole} aria-label={`Loch ${hole.hole}, Par ${hole.par}, ${ROUND_STATUS_COPY[hole.status]}`}>
+                <span className="round-hole-route"><i /><i /></span><span className="round-hole-number">{String(hole.hole).padStart(2, '0')}</span><span className="round-hole-meta"><b>PAR {hole.par}</b><small>{hole.lengthMeters ? `${hole.lengthMeters} M` : ROUND_STATUS_COPY[hole.status]}</small></span>{hole.sequenceCount > 0 && <strong>{hole.sequenceCount}</strong>}
+            </button>)}
+        </div>
+        <footer className="round-desk-foot"><Flag size={15} /><span>{summary.activeHoles ? `${summary.activeHoles} Löcher erzählen bereits eine Geschichte.` : 'Die Runde ist angelegt. Importiere Material, um die erste Hole Story zu beginnen.'}</span></footer>
+        {previewOpen && <RoughCutPreview project={project} setProject={setProject} onClose={() => setPreviewOpen(false)} onEdit={(sequenceId) => { setPreviewOpen(false); onOpenSequence(sequenceId); }} />}
+    </section>;
+}
+
 function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfProject; setProject: (project: GolfProject) => void; onOpenSequence: (sequenceId: string) => void }) {
     const [hole, setHole] = useState(1);
     const [newTypes, setNewTypes] = useState<Record<string, BlockType>>({});
@@ -1488,9 +1565,10 @@ function ExportScreen({ project }: { project: GolfProject }) {
 
 function Studio({ initialProject, onNew }: { initialProject: GolfProject; onNew: () => void }) {
     const [project, setProject] = useState(initialProject);
-    const [screen, setScreen] = useState<StudioScreen>('import');
+    const [screen, setScreen] = useState<StudioScreen>('round');
     const [initialMediaId, setInitialMediaId] = useState<string>();
     const [initialSequenceId, setInitialSequenceId] = useState<string>();
+    const [initialHole, setInitialHole] = useState<number>();
     const [saveState, setSaveState] = useState('Media Engine bereit');
     const [dashboardOpen, setDashboardOpen] = useState(false);
     const save = async () => {
@@ -1500,22 +1578,25 @@ function Studio({ initialProject, onNew }: { initialProject: GolfProject; onNew:
             setSaveState(result.canceled ? 'Speichern abgebrochen' : 'Projekt gespeichert');
         } catch (error) { setSaveState(error instanceof Error ? error.message : 'Speichern fehlgeschlagen'); }
     };
-    const goReview = (mediaId?: string) => { setInitialMediaId(mediaId); setInitialSequenceId(undefined); setScreen('review'); };
-    const openSequence = (sequenceId: string) => { setInitialSequenceId(sequenceId); setInitialMediaId(undefined); setScreen('review'); };
+    const goReview = (mediaId?: string) => { setInitialMediaId(mediaId); setInitialSequenceId(undefined); setInitialHole(undefined); setScreen('review'); };
+    const openSequence = (sequenceId: string) => { setInitialSequenceId(sequenceId); setInitialMediaId(undefined); setInitialHole(undefined); setScreen('review'); };
+    const startHoleReview = (hole: number) => { setInitialSequenceId(undefined); setInitialMediaId(undefined); setInitialHole(hole); setScreen('review'); };
     const navigate = (next: StudioScreen) => {
-        if (next === 'review') { setInitialMediaId(undefined); setInitialSequenceId(undefined); }
+        if (next === 'review') { setInitialMediaId(undefined); setInitialSequenceId(undefined); setInitialHole(undefined); }
         setScreen(next);
     };
-    const content = screen === 'import'
-        ? <ImportScreen project={project} setProject={setProject} onReview={goReview} />
+    const content = screen === 'round'
+        ? <RoundDesk project={project} setProject={setProject} onNavigate={navigate} onOpenSequence={openSequence} onStartHole={startHoleReview} />
+        : screen === 'import'
+            ? <ImportScreen project={project} setProject={setProject} onReview={goReview} />
         : screen === 'review'
-            ? <ReviewScreen key={initialSequenceId ?? initialMediaId ?? 'review'} project={project} setProject={setProject} initialMediaId={initialMediaId} initialSequenceId={initialSequenceId} />
+            ? <ReviewScreen key={initialSequenceId ?? initialMediaId ?? (initialHole ? `hole-${initialHole}` : 'review')} project={project} setProject={setProject} initialMediaId={initialMediaId} initialSequenceId={initialSequenceId} initialHole={initialHole} />
             : screen === 'build'
                 ? <RoundBuilder project={project} setProject={setProject} onOpenSequence={openSequence} />
                 : <ExportScreen project={project} />;
     const platformLabel = window.golfStudio?.platform === 'win32' ? 'Windows' : window.golfStudio?.platform === 'darwin' ? 'macOS · Apple Silicon' : window.golfStudio?.platform ?? 'Desktop';
     if (dashboardOpen) return <Dashboard onClose={() => setDashboardOpen(false)} />;
-    return <main className="studio-shell"><TopBar screen={screen} onScreen={navigate} onSave={save} onDashboard={() => setDashboardOpen(true)} /><Sidebar project={project} screen={screen} onScreen={navigate} onNew={onNew} />{content}<footer className="statusbar"><span><span className="status-dot" /> {saveState}</span><span><HardDrive size={13} /> Lokal · {platformLabel}</span></footer></main>;
+    return <main className="studio-shell"><TopBar project={project} screen={screen} onScreen={navigate} onSave={save} onDashboard={() => setDashboardOpen(true)} /><Sidebar project={project} screen={screen} onScreen={navigate} onNew={onNew} />{content}<footer className="statusbar"><span><span className="status-dot" /> {saveState}</span><span><HardDrive size={13} /> Lokal · {platformLabel}</span></footer></main>;
 }
 
 export default function App() {
