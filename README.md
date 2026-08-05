@@ -44,6 +44,8 @@ npm run orchestrate -- --repo johannesstuck-eng/Golf-Studio
 
 Der Bericht landet unter `reports/orchestrator-report.md`. Mit `--issues <datei.json>` kann stattdessen ein lokaler Issues-Snapshot verwendet werden.
 
+Das lokale **Mission Control** liest Issues und Pull Requests direkt aus GitHub und zeigt den gewichteten Fortschritt pro Agent sowie für das Gesamtprojekt. Das Statusmodell ist in [docs/agent-dashboard.md](docs/agent-dashboard.md) dokumentiert; die App speichert dafür keinen GitHub-Token.
+
 ## Arbeitsweise und Sicherheit
 
 - keine direkte Arbeit auf `main`
@@ -60,6 +62,7 @@ Die verbindlichen Regeln stehen in [AGENTS.md](AGENTS.md) und [docs/approval-pol
 - [Produktstatus](docs/product-status.md)
 - [MVP-Umfang](docs/mvp-scope.md)
 - [Roadmap](docs/roadmap.md)
+- [Agent Dashboard](docs/agent-dashboard.md)
 - [Architektur](docs/architecture.md)
 - [Business-Hypothesen](docs/business-hypotheses.md)
 - [Landingpage-Textentwurf](docs/landing-page-copy.md)

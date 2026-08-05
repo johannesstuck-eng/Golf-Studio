@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('golfStudio', {
     isDesktop: true,
     platform: process.platform,
+    openExternal: (url) => ipcRenderer.invoke('external:open', url),
     chooseMedia: () => ipcRenderer.invoke('media:choose'),
     probeDroppedFiles: (files) => {
         const paths = files

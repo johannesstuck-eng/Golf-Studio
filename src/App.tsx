@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Aperture, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, CalendarClock, Camera, Check, ChevronLeft, ChevronRight,
     CircleHelp, ClipboardList, Clock3, Copy, Download, FileAudio, FileVideo, Film, Flag, FolderOpen, HardDrive,
-    ImageUp, Import, Layers, LayoutGrid, MonitorPlay, Pause, Pencil, Play, Plus, RotateCcw, Save,
+    ImageUp, Import, Layers, LayoutDashboard, LayoutGrid, MonitorPlay, Pause, Pencil, Play, Plus, RotateCcw, Save,
     Crosshair, Scissors, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Trophy, Users, WandSparkles, X,
 } from 'lucide-react';
 import {
@@ -37,6 +37,7 @@ import { buildExportSummary } from './exportProfile';
 import { EDITORIAL_STYLE, editorialTransition, scoreBeforeHole } from './editorialStyle';
 import { createTracerFlight, insertTracerIntermediate } from './tracerWorkflow';
 import { lockTracerPointsToWorld, screenToWorld, svgCameraMatrix, worldToScreen } from './cameraLock';
+import { Dashboard } from './AgentDashboard';
 
 const makeId = () => crypto.randomUUID();
 type StudioScreen = 'import' | 'review' | 'build' | 'export';
@@ -164,10 +165,11 @@ function Brand() {
 interface SetupProps {
     onCreate: (settings: ProjectSettings) => void;
     onOpen: () => void;
+    onDashboard: () => void;
     error: string;
 }
 
-function SetupScreen({ onCreate, onOpen, error }: SetupProps) {
+function SetupScreen({ onCreate, onOpen, onDashboard, error }: SetupProps) {
     const [course, setCourse] = useState('');
     const [holes, setHoles] = useState<9 | 18>(9);
     const [players, setPlayers] = useState([{ id: makeId(), name: 'Joe' }, { id: makeId(), name: 'Ferdi' }]);
@@ -176,7 +178,7 @@ function SetupScreen({ onCreate, onOpen, error }: SetupProps) {
     const [frameRate, setFrameRate] = useState<30 | 60>(60);
     const valid = course.trim() && players.some((player) => player.name.trim());
     return <main className="setup-shell">
-        <header className="setup-brand"><Brand /></header>
+        <header className="setup-brand"><Brand /></header><button className="mission-entry setup" onClick={onDashboard}><LayoutDashboard size={16} /> Mission Control</button>
         <section className="setup-card">
             <div className="eyebrow"><span /> NEUES PROJEKT</div>
             <h1>Welche Runde<br />schneiden wir?</h1>
@@ -213,12 +215,12 @@ function OptionButtons({ label, values, labels, value, onChange, suffix = '' }: 
     return <div><span className="field-label">{label}</span><div className={`segmented columns-${values.length}`}>{values.map((item, index) => <button type="button" className={value === item ? 'active' : ''} onClick={() => onChange(item)} key={item}>{labels?.[index] ?? item}{suffix}</button>)}</div></div>;
 }
 
-function TopBar({ screen, onScreen, onSave }: { screen: StudioScreen; onScreen: (value: StudioScreen) => void; onSave: () => void }) {
+function TopBar({ screen, onScreen, onSave, onDashboard }: { screen: StudioScreen; onScreen: (value: StudioScreen) => void; onSave: () => void; onDashboard: () => void }) {
     return <header className="topbar"><Brand /><nav className="steps">
         <button className={screen === 'import' ? 'active' : 'done'} onClick={() => onScreen('import')}><b>1</b> Import</button><i />
         <button className={screen === 'review' ? 'active' : screen === 'build' || screen === 'export' ? 'done' : ''} onClick={() => onScreen('review')}><b>2</b> Sichten</button><i />
         <button className={screen === 'build' ? 'active' : screen === 'export' ? 'done' : ''} onClick={() => onScreen('build')}><b>3</b> Runde bauen</button><i /><button className={screen === 'export' ? 'active' : ''} onClick={() => onScreen('export')}><b>4</b> Export</button>
-    </nav><div className="top-actions"><button className="icon-button" title="Hilfe"><CircleHelp size={19} /></button><button className="secondary" onClick={onSave}><Save size={16} /> Speichern</button></div></header>;
+    </nav><div className="top-actions"><button className="icon-button" title="Mission Control" onClick={onDashboard}><LayoutDashboard size={18} /></button><button className="icon-button" title="Hilfe"><CircleHelp size={19} /></button><button className="secondary" onClick={onSave}><Save size={16} /> Speichern</button></div></header>;
 }
 
 function Sidebar({ project, screen, onScreen, onNew }: { project: GolfProject; screen: StudioScreen; onScreen: (value: StudioScreen) => void; onNew: () => void }) {
@@ -1365,6 +1367,7 @@ function Studio({ initialProject, onNew }: { initialProject: GolfProject; onNew:
     const [initialMediaId, setInitialMediaId] = useState<string>();
     const [initialSequenceId, setInitialSequenceId] = useState<string>();
     const [saveState, setSaveState] = useState('Media Engine bereit');
+    const [dashboardOpen, setDashboardOpen] = useState(false);
     const save = async () => {
         if (!window.golfStudio) return setSaveState('Speichern nur in der Desktop-App verfügbar');
         try {
@@ -1386,11 +1389,13 @@ function Studio({ initialProject, onNew }: { initialProject: GolfProject; onNew:
                 ? <RoundBuilder project={project} setProject={setProject} onOpenSequence={openSequence} />
                 : <ExportScreen project={project} />;
     const platformLabel = window.golfStudio?.platform === 'win32' ? 'Windows' : window.golfStudio?.platform === 'darwin' ? 'macOS · Apple Silicon' : window.golfStudio?.platform ?? 'Desktop';
-    return <main className="studio-shell"><TopBar screen={screen} onScreen={navigate} onSave={save} /><Sidebar project={project} screen={screen} onScreen={navigate} onNew={onNew} />{content}<footer className="statusbar"><span><span className="status-dot" /> {saveState}</span><span><HardDrive size={13} /> Lokal · {platformLabel}</span></footer></main>;
+    if (dashboardOpen) return <Dashboard onClose={() => setDashboardOpen(false)} />;
+    return <main className="studio-shell"><TopBar screen={screen} onScreen={navigate} onSave={save} onDashboard={() => setDashboardOpen(true)} /><Sidebar project={project} screen={screen} onScreen={navigate} onNew={onNew} />{content}<footer className="statusbar"><span><span className="status-dot" /> {saveState}</span><span><HardDrive size={13} /> Lokal · {platformLabel}</span></footer></main>;
 }
 
 export default function App() {
     const [project, setProject] = useState<GolfProject | null>(null);
+    const [dashboardOpen, setDashboardOpen] = useState(false);
     const [error, setError] = useState('');
     const open = async () => {
         if (!window.golfStudio) return setError('Die Desktop-Brücke ist nicht verfügbar. Bitte die App neu starten.');
@@ -1399,7 +1404,8 @@ export default function App() {
             if (!result.canceled && result.project) setProject(normalizeProject(result.project));
         } catch (reason) { setError(reason instanceof Error ? reason.message : 'Projekt konnte nicht geöffnet werden.'); }
     };
+    if (dashboardOpen) return <Dashboard onClose={() => setDashboardOpen(false)} />;
     return project
         ? <Studio initialProject={project} onNew={() => setProject(null)} />
-        : <SetupScreen error={error} onOpen={open} onCreate={(settings) => setProject(createProject(settings))} />;
+        : <SetupScreen error={error} onOpen={open} onDashboard={() => setDashboardOpen(true)} onCreate={(settings) => setProject(createProject(settings))} />;
 }
