@@ -1,6 +1,6 @@
 # Golf Studio
 
-Golf Studio ist eine lokale Windows-Desktop-App für Golfer und Golf-Content-Creator. Sie soll Golfvideos importieren, Schläge und Runden strukturieren, Shot-Tracer und Overlays ergänzen und fertige Clips exportieren. Windows ist die erste Zielplattform; macOS folgt später.
+Golf Studio ist das lokale Schnitt-Playbook für komplette Golfvideos. Die Windows-Desktop-App führt Golfer und Golf-Content-Creator vom Rohmaterial über die Struktur nach Löchern, Spielern und Schlägen zum zusammenhängenden Rohschnitt und ergänzt Multicam, Golf-Overlays und Shot-Tracer innerhalb desselben Workflows. Aus einem Projekt sollen sich vollständige Rundenvideos, einzelne Löcher und Social Clips exportieren lassen. Windows ist die erste Zielplattform; macOS folgt später.
 
 > Status: technischer Prototyp. Die vorhandenen Funktionen sind eine gute Ausgangsbasis, aber noch kein freigegebenes oder verkaufsfertiges Produkt. Siehe [Produktstatus](docs/product-status.md) und [MVP-Umfang](docs/mvp-scope.md).
 
@@ -60,4 +60,5 @@ Die verbindlichen Regeln stehen in [AGENTS.md](AGENTS.md) und [docs/approval-pol
 - [Roadmap](docs/roadmap.md)
 - [Architektur](docs/architecture.md)
 - [Business-Hypothesen](docs/business-hypotheses.md)
+- [Landingpage-Textentwurf](docs/landing-page-copy.md)
 - [Freigaberichtlinie](docs/approval-policy.md)
