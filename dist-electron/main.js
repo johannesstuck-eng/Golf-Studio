@@ -7,7 +7,9 @@ import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import ffmpegStatic from 'ffmpeg-static';
-import { assertMediaFilesAreReadable, IpcValidationError, isTrustedAppUrl, validateExportRequest, validateProbePaths, validateProject } from './ipc-validation.js';
+import { assertMediaFilesAreReadable, IpcValidationError, isTrustedAppUrl, validateExportRequest, validateMulticamSyncRequest, validateProbePaths, validateProject } from './ipc-validation.js';
+import { exportMediaForSequence, exportRangeForSequence } from './multicam-export.js';
+import { alignAudioTracks, compactWaveform, pcm16Envelope } from './audio-sync.js';
 const execFileAsync = promisify(execFile);
 const mediaExtensions = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mkv', '.wav', '.mp3', '.m4a', '.aac', '.flac']);
 const audioExtensions = new Set(['.wav', '.mp3', '.m4a', '.aac', '.flac']);
@@ -112,18 +114,62 @@ async function probePaths(paths) {
     return results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
 }
 
+const audioEnvelopeCache = new Map();
+async function audioEnvelope(media) {
+    const info = await fs.stat(media.path);
+    if (!info.isFile()) throw new Error('Audiodatei ist nicht mehr verfügbar.');
+    const key = `${media.path}:${info.size}:${info.mtimeMs}`;
+    const cached = audioEnvelopeCache.get(key);
+    if (cached) return cached;
+    const seconds = Math.max(5, Math.min(600, media.durationSeconds || 600));
+    const { stdout } = await execFileAsync(ffmpegPath(), [
+        '-nostdin', '-v', 'error', '-i', media.path, '-map', '0:a:0', '-vn',
+        '-ac', '1', '-ar', '2000', '-t', String(seconds), '-f', 's16le', 'pipe:1',
+    ], { encoding: 'buffer', maxBuffer: 32 * 1024 * 1024, windowsHide: true });
+    const envelope = pcm16Envelope(stdout, 2000, 50);
+    if (envelope.length < 250) throw new Error('Tonspur ist für eine Synchronisierung zu kurz.');
+    audioEnvelopeCache.set(key, envelope);
+    if (audioEnvelopeCache.size > 150) audioEnvelopeCache.delete(audioEnvelopeCache.keys().next().value);
+    return envelope;
+}
+
+async function syncMulticamAudio(event, requestValue) {
+    const request = validateMulticamSyncRequest(requestValue);
+    const audioMedia = request.media.filter((media) => media.hasAudio);
+    const result = { groupId: request.groupId, referenceMediaId: null, referenceByMediaId: {}, offsetsSeconds: {}, confidenceByMediaId: {}, waveforms: {}, failures: [] };
+    if (audioMedia.length < 2) {
+        result.failures.push('Für die automatische Synchronisierung werden mindestens zwei Tonspuren benötigt.');
+        return result;
+    }
+    const total = audioMedia.length;
+    let completed = 0;
+    const report = (message) => event.sender.send('multicam:sync-progress', { groupId: request.groupId, completed, total, message });
+    const tracks = [];
+    for (const media of audioMedia) {
+        report(`Tonspuren werden abgeglichen (${completed + 1}/${total})`);
+        try {
+            const envelope = await audioEnvelope(media);
+            result.waveforms[media.id] = compactWaveform(envelope, 6000);
+            tracks.push({ ...media, envelope });
+        } catch (error) {
+            result.failures.push(`${media.id}: ${error instanceof Error ? error.message : 'Tonspur konnte nicht gelesen werden.'}`);
+        }
+        completed += 1;
+    }
+    const alignment = alignAudioTracks(tracks, 50, 15);
+    result.referenceMediaId = alignment.referenceMediaId;
+    result.referenceByMediaId = alignment.referenceByMediaId;
+    result.offsetsSeconds = alignment.offsetsSeconds;
+    result.confidenceByMediaId = alignment.confidenceByMediaId;
+    result.failures.push(...alignment.unmatchedIds.map((id) => `${id}: Keine eindeutige Übereinstimmung mit einer überlappenden Tonspur.`));
+    report('Tonspuren wurden analysiert.');
+    return result;
+}
+
 function ffmpegPath() {
     if (process.env.FFMPEG_PATH)
         return process.env.FFMPEG_PATH;
     return app.isPackaged ? ffmpegStatic.replace('app.asar', 'app.asar.unpacked') : ffmpegStatic;
-}
-
-function exportMediaForSequence(project, sequence) {
-    if (sequence.sourceType === 'media')
-        return project.media.find((media) => media.id === sequence.sourceId) ?? null;
-    const group = project.groups.find((item) => item.id === sequence.sourceId);
-    return project.media.find((media) => group?.mediaIds.includes(media.id) && media.kind === 'video')
-        ?? project.media.find((media) => group?.mediaIds.includes(media.id)) ?? null;
 }
 
 function even(value) {
@@ -406,7 +452,10 @@ function holeCardFilters(project, block, settings, videoLabel, audioLabel) {
 
 async function exportVideo(event, request) {
     const sequences = request.sequenceIds.map((id) => request.project.sequences.find((sequence) => sequence.id === id)).filter(Boolean);
-    const segments = sequences.map((sequence) => ({ sequence, media: exportMediaForSequence(request.project, sequence), block: request.project.blocks.find((block) => block.id === sequence.targetBlockId) })).filter((item) => item.media && item.block);
+    const segments = sequences.map((sequence) => {
+        const media = exportMediaForSequence(request.project, sequence);
+        return { sequence, media, range: media ? exportRangeForSequence(sequence, media) : null, block: request.project.blocks.find((block) => block.id === sequence.targetBlockId) };
+    }).filter((item) => item.media && item.range && item.block);
     if (!segments.length)
         return { canceled: false, error: 'Keine exportierbaren Sequenzen vorhanden.' };
     await assertMediaFilesAreReadable({ media: segments.map((segment) => segment.media) });
@@ -417,17 +466,17 @@ async function exportVideo(event, request) {
     const outputPath = path.extname(result.filePath) ? result.filePath : `${result.filePath}.${settings.extension}`;
     const temporaryDirectory = await fs.mkdtemp(path.join(app.getPath('temp'), 'golf-round-export-'));
     const holeChangeCount = segments.slice(0, -1).filter((item, index) => item.block.hole !== segments[index + 1].block.hole).length;
-    const totalDuration = segments.reduce((total, item) => total + (item.sequence.outFrame - item.sequence.inFrame) / item.sequence.sourceFps, 0) + holeChangeCount * 1.8;
+    const totalDuration = segments.reduce((total, item) => total + (item.range.outFrame - item.range.inFrame) / item.range.sourceFps, 0) + holeChangeCount * 1.8;
     event.sender.send('export:progress', { phase: 'preparing', percent: 0, message: `${settings.width}×${settings.height} · ${settings.fps} fps · ${settings.videoCodec}${settings.accelerated ? ' (GPU)' : ''}` });
     try {
         const args = ['-y', '-hide_banner'];
-        segments.forEach(({ sequence, media }) => {
-            args.push('-ss', (sequence.inFrame / sequence.sourceFps).toFixed(6), '-t', ((sequence.outFrame - sequence.inFrame) / sequence.sourceFps).toFixed(6), '-i', media.path);
+        segments.forEach(({ range, media }) => {
+            args.push('-ss', (range.inFrame / range.sourceFps).toFixed(6), '-t', ((range.outFrame - range.inFrame) / range.sourceFps).toFixed(6), '-i', media.path);
         });
         const graph = [];
         const concatLabels = [];
-        segments.forEach(({ sequence, media, block }, index) => {
-            const duration = (sequence.outFrame - sequence.inFrame) / sequence.sourceFps;
+        segments.forEach(({ sequence, media, range, block }, index) => {
+            const duration = (range.outFrame - range.inFrame) / range.sourceFps;
             const previousBlock = segments[index - 1]?.block;
             const nextBlock = segments[index + 1]?.block;
             const startsHole = Boolean(previousBlock && previousBlock.hole !== block.hole);
@@ -537,6 +586,7 @@ function registerIpc() {
         return result.canceled ? [] : probePaths(result.filePaths);
     });
     registerTrustedHandler('media:probe-paths', (_event, paths) => probePaths(paths));
+    registerTrustedHandler('multicam:sync-audio', (event, request) => syncMulticamAudio(event, request));
     registerTrustedHandler('project:save', async (_event, projectValue) => {
         const project = validateProject(projectValue);
         const result = await dialog.showSaveDialog({

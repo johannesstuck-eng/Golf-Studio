@@ -1,4 +1,4 @@
-import type { ExportProgress, ExportRequest, GolfProject, MediaItem } from './types';
+import type { ExportProgress, ExportRequest, GolfProject, MediaItem, MulticamAudioSyncRequest, MulticamAudioSyncResult, MulticamSyncProgress } from './types';
 
 declare global {
     interface Window {
@@ -8,6 +8,8 @@ declare global {
             openExternal: (url: string) => Promise<{ opened: boolean }>;
             chooseMedia: () => Promise<MediaItem[]>;
             probeDroppedFiles: (files: File[]) => Promise<MediaItem[]>;
+            syncMulticamAudio: (request: MulticamAudioSyncRequest) => Promise<MulticamAudioSyncResult>;
+            onMulticamSyncProgress: (callback: (progress: MulticamSyncProgress) => void) => () => void;
             saveProject: (project: GolfProject) => Promise<{ canceled: boolean; path?: string }>;
             openProject: () => Promise<{ canceled: boolean; path?: string; project?: unknown }>;
             chooseScorecard: () => Promise<{ canceled: boolean; path?: string }>;

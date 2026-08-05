@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it, mock } from 'node:test';
-import { assertMediaFilesAreReadable, isTrustedAppUrl, validateExportRequest, validateProbePaths } from './ipc-validation.js';
+import { assertMediaFilesAreReadable, isTrustedAppUrl, validateExportRequest, validateMulticamSyncRequest, validateProbePaths } from './ipc-validation.js';
 
 const fixturePath = process.platform === 'win32' ? 'C:\\video\\round.mp4' : '/video/round.mp4';
 
 function projectFixture() {
     return {
-        schemaVersion: 6,
+        schemaVersion: 8,
         settings: { course: 'Testplatz', holes: 9, frameRate: 30, players: [{ id: 'player-1', name: 'Alex' }] },
         media: [{ id: 'media-1', path: fixturePath, name: 'round.mp4', kind: 'video', durationSeconds: 10, width: 1920, height: 1080, fps: 30, codec: 'h264', hasAudio: true, sizeBytes: 1024, bitDepth: 8 }],
         groups: [],
@@ -42,6 +42,33 @@ describe('IPC validation', () => {
         const project = projectFixture();
         project.sequences[0].sourceId = 'missing-media';
         assert.throws(() => validateExportRequest({ project, sequenceIds: ['sequence-1'], profile: 'source-matched' }), /Unbekannte Quelle/);
+    });
+
+    it('validates multicam angles against their group', () => {
+        const project = projectFixture();
+        project.groups = [{ id: 'group-1', mediaIds: ['media-1'] }];
+        project.sequences[0] = { ...project.sequences[0], sourceType: 'group', sourceId: 'group-1', activeMediaId: 'media-1', multicamAngles: [{ mediaId: 'media-1', inFrame: 0, outFrame: 300, sourceFps: 30 }] };
+        assert.doesNotThrow(() => validateExportRequest({ project, sequenceIds: ['sequence-1'], profile: 'source-matched' }));
+        project.sequences[0].multicamAngles[0].mediaId = 'foreign-camera';
+        assert.throws(() => validateExportRequest({ project, sequenceIds: ['sequence-1'], profile: 'source-matched' }), /Multicam-Gruppe/);
+    });
+
+    it('validates manual multicam sync offsets against group cameras', () => {
+        const project = projectFixture();
+        project.groups = [{ id: 'group-1', mediaIds: ['media-1'], syncStatus: 'manual', syncOffsetsSeconds: { 'media-1': 0.125 } }];
+        assert.doesNotThrow(() => validateExportRequest({ project, sequenceIds: ['sequence-1'], profile: 'source-matched' }));
+        project.groups[0].syncOffsetsSeconds.foreign = 1;
+        assert.throws(() => validateExportRequest({ project, sequenceIds: ['sequence-1'], profile: 'source-matched' }), /Multicam-Gruppe/);
+    });
+
+    it('accepts only bounded local media for audio synchronization', () => {
+        const request = { groupId: 'group-1', media: [
+            { id: 'a', path: fixturePath, recordedAt: '2026-08-05T10:00:00.000Z', durationSeconds: 10, hasAudio: true },
+            { id: 'b', path: fixturePath, recordedAt: '2026-08-05T10:00:01.000Z', durationSeconds: 10, hasAudio: true },
+        ] };
+        assert.equal(validateMulticamSyncRequest(request), request);
+        request.media[1].path = 'https://example.test/video.mp4';
+        assert.throws(() => validateMulticamSyncRequest(request), /lokaler Dateipfad/);
     });
 
     it('checks that selected input paths resolve to regular files', async () => {

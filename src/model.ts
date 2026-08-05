@@ -5,6 +5,7 @@ import {
     type GolfProject,
     type HoleData,
     type MediaItem,
+    type MulticamAngle,
     type MulticamSuggestion,
     type OverlayPosition,
     type OverlayType,
@@ -64,7 +65,7 @@ export function createDefaultBlocks(settings: ProjectSettings): GolfBlock[] {
 
 export function createProject(settings: ProjectSettings): GolfProject {
     return {
-        schemaVersion: 6,
+        schemaVersion: 8,
         settings,
         media: [],
         suggestions: [],
@@ -106,13 +107,29 @@ export function normalizeProject(input: unknown): GolfProject {
         holes: defaultCourseData.holes.map((hole) => ({ ...hole, ...(rawHoles.find((item) => item.number === hole.number) ?? {}) })),
     };
     return {
-        schemaVersion: 6,
+        schemaVersion: 8,
         settings,
         media: Array.isArray(raw.media) ? raw.media : [],
         suggestions: Array.isArray(raw.suggestions) ? raw.suggestions : [],
-        groups: Array.isArray(raw.groups) ? raw.groups : [],
+        groups: Array.isArray(raw.groups) ? raw.groups.map((group) => ({
+            ...group,
+            syncOffsetsSeconds: Object.fromEntries(Object.entries(group.syncOffsetsSeconds ?? {})
+                .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+                .map(([mediaId, value]) => [mediaId, Math.min(3600, Math.max(-3600, Math.round(value * 1000) / 1000))])),
+        })) : [],
         blocks,
-        sequences: Array.isArray(raw.sequences) ? raw.sequences : [],
+        sequences: Array.isArray(raw.sequences) ? raw.sequences.map((sequence) => ({
+            ...sequence,
+            activeMediaId: sequence.sourceType === 'group' ? sequence.activeMediaId : undefined,
+            multicamAngles: sequence.sourceType === 'group' && Array.isArray(sequence.multicamAngles)
+                ? sequence.multicamAngles.map((angle) => ({
+                    mediaId: angle.mediaId,
+                    inFrame: Math.max(0, Math.round(angle.inFrame)),
+                    outFrame: Math.max(1, Math.round(angle.outFrame)),
+                    sourceFps: angle.sourceFps,
+                }))
+                : undefined,
+        })) : [],
         overlays: Array.isArray(raw.overlays) ? raw.overlays.map((overlay) => ({
             ...overlay,
             position: overlay.position ?? (overlay.type === 'hole-info' ? 'top-right' : overlay.type === 'score-card' ? 'top-left' : 'bottom-left'),
@@ -183,13 +200,15 @@ export function upsertSequence(project: GolfProject, draft: SequenceDraft): Golf
         inFrame: Math.max(0, Math.round(draft.inFrame)),
         outFrame: Math.max(1, Math.round(draft.outFrame)),
         sourceFps: draft.sourceFps,
+        activeMediaId: draft.sourceType === 'group' ? draft.activeMediaId : undefined,
+        multicamAngles: draft.sourceType === 'group' ? draft.multicamAngles : undefined,
         targetBlockId: target.id,
         createdAt: oldSequence?.createdAt ?? now,
         updatedAt: now,
     };
     return {
         ...project,
-        schemaVersion: 6,
+        schemaVersion: 8,
         blocks,
         sequences: oldSequence
             ? project.sequences.map((item) => item.id === sequenceId ? sequence : item)
@@ -327,7 +346,7 @@ export function toggleSequenceOverlay(project: GolfProject, sequenceId: string, 
             endFrame: sequence.outFrame - sequence.inFrame,
             position: type === 'hole-info' ? 'top-right' as const : type === 'score-card' ? 'top-left' as const : 'bottom-left' as const,
         }];
-    return { ...project, schemaVersion: 6, overlays, modifiedAt: new Date().toISOString() };
+    return { ...project, schemaVersion: 8, overlays, modifiedAt: new Date().toISOString() };
 }
 
 function defaultShotTracer(sequence: GolfProject['sequences'][number]): ShotTracerEffect {
@@ -354,7 +373,7 @@ export function toggleShotTracer(project: GolfProject, sequenceId: string): Golf
     const shotTracers = existing
         ? project.shotTracers.map((tracer) => tracer.id === existing.id ? { ...tracer, enabled: !tracer.enabled } : tracer)
         : [...project.shotTracers, defaultShotTracer(sequence)];
-    return { ...project, schemaVersion: 6, shotTracers, modifiedAt: new Date().toISOString() };
+    return { ...project, schemaVersion: 8, shotTracers, modifiedAt: new Date().toISOString() };
 }
 
 export function updateShotTracer(project: GolfProject, sequenceId: string, patch: Partial<Omit<ShotTracerEffect, 'id' | 'sequenceId'>>): GolfProject {
@@ -382,7 +401,7 @@ export function updateShotTracer(project: GolfProject, sequenceId: string, patch
     };
     return {
         ...project,
-        schemaVersion: 6,
+        schemaVersion: 8,
         shotTracers: project.shotTracers.map((item) => item.id === tracer.id ? updated : item),
         modifiedAt: new Date().toISOString(),
     };
@@ -542,11 +561,82 @@ export function movePlayerInOrder(project: GolfProject, hole: number, blockOrder
     const playerOrders = exists
         ? project.playerOrders.map((order) => order.hole === hole && order.blockOrder === blockOrder ? { ...order, playerIds } : order)
         : [...project.playerOrders, { hole, blockOrder, playerIds }];
-    return { ...project, schemaVersion: 6, playerOrders, modifiedAt: new Date().toISOString() };
+    return { ...project, schemaVersion: 8, playerOrders, modifiedAt: new Date().toISOString() };
 }
 
 const start = (media: MediaItem) => Date.parse(media.recordedAt);
 const end = (media: MediaItem) => start(media) + media.durationSeconds * 1000;
+
+export function multicamSyncOffset(project: GolfProject, groupId: string, mediaId: string): number {
+    const value = project.groups.find((group) => group.id === groupId)?.syncOffsetsSeconds?.[mediaId] ?? 0;
+    return Number.isFinite(value) ? value : 0;
+}
+
+export function multicamMediaStartMs(project: GolfProject, groupId: string, media: MediaItem): number {
+    return start(media) - multicamSyncOffset(project, groupId, media.id) * 1000;
+}
+
+export function multicamTimeline(project: GolfProject, groupId: string): { startMs: number; endMs: number; fps: number; media: MediaItem[] } | null {
+    const group = project.groups.find((item) => item.id === groupId);
+    const media = (group?.mediaIds ?? [])
+        .map((mediaId) => project.media.find((item) => item.id === mediaId))
+        .filter((item): item is MediaItem => Boolean(item && item.kind === 'video' && Number.isFinite(start(item)) && item.durationSeconds > 0));
+    if (!media.length) return null;
+    return {
+        startMs: Math.min(...media.map(start)),
+        endMs: Math.max(...media.map((item) => multicamMediaStartMs(project, groupId, item) + item.durationSeconds * 1000)),
+        fps: Math.max(1, ...media.map((item) => item.fps && item.fps > 0 ? item.fps : project.settings.frameRate ?? 30)),
+        media,
+    };
+}
+
+export function multicamAnglesForRange(project: GolfProject, groupId: string, inFrame: number, outFrame: number, sourceFps: number): MulticamAngle[] {
+    const timeline = multicamTimeline(project, groupId);
+    if (!timeline || outFrame <= inFrame || sourceFps <= 0) return [];
+    const selectionStartMs = timeline.startMs + inFrame / sourceFps * 1000;
+    const selectionEndMs = timeline.startMs + outFrame / sourceFps * 1000;
+    return timeline.media.flatMap((media) => {
+        const mediaStartMs = multicamMediaStartMs(project, groupId, media);
+        const overlapStartMs = Math.max(selectionStartMs, mediaStartMs);
+        const overlapEndMs = Math.min(selectionEndMs, mediaStartMs + media.durationSeconds * 1000);
+        if (overlapEndMs <= overlapStartMs) return [];
+        const fps = media.fps && media.fps > 0 ? media.fps : sourceFps;
+        return [{
+            mediaId: media.id,
+            inFrame: Math.max(0, Math.round((overlapStartMs - mediaStartMs) / 1000 * fps)),
+            outFrame: Math.max(1, Math.round((overlapEndMs - mediaStartMs) / 1000 * fps)),
+            sourceFps: fps,
+        }];
+    });
+}
+
+export function setMulticamSyncOffsets(project: GolfProject, groupId: string, offsets: Record<string, number>, syncStatus: 'manual' | 'audio'): GolfProject {
+    const group = project.groups.find((item) => item.id === groupId);
+    if (!group) return project;
+    const validOffsets = Object.fromEntries(Object.entries(offsets)
+        .filter(([mediaId, seconds]) => group.mediaIds.includes(mediaId) && Number.isFinite(seconds))
+        .map(([mediaId, seconds]) => [mediaId, Math.min(3600, Math.max(-3600, Math.round(seconds * 1000) / 1000))]));
+    if (!Object.keys(validOffsets).length) return project;
+    const now = new Date().toISOString();
+    const groups = project.groups.map((item) => item.id === groupId ? {
+        ...item,
+        syncStatus,
+        syncOffsetsSeconds: { ...(item.syncOffsetsSeconds ?? {}), ...validOffsets },
+    } : item);
+    const next = { ...project, schemaVersion: 8, groups, modifiedAt: now };
+    return {
+        ...next,
+        sequences: next.sequences.map((sequence) => sequence.sourceType === 'group' && sequence.sourceId === groupId ? {
+            ...sequence,
+            multicamAngles: multicamAnglesForRange(next, groupId, sequence.inFrame, sequence.outFrame, sequence.sourceFps),
+            updatedAt: now,
+        } : sequence),
+    };
+}
+
+export function setMulticamSyncOffset(project: GolfProject, groupId: string, mediaId: string, seconds: number): GolfProject {
+    return setMulticamSyncOffsets(project, groupId, { [mediaId]: seconds }, 'manual');
+}
 
 function filenameCameraFamily(name: string): string {
     const stem = name.replace(/\.[^.]+$/, '').toLowerCase();
