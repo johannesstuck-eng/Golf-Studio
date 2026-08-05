@@ -6,7 +6,7 @@ Golf-Aufnahmen bestehen häufig aus langen, unübersichtlichen Clips. Allgemeine
 
 ## Vision
 
-Golf Studio macht aus dem Rohmaterial einer Golfrunde ein zusammenhängendes Golfvideo. Statt mit einer leeren generischen Timeline zu beginnen, folgt der Nutzer einem fertigen Schnitt-Playbook: Material sichten, Löchern, Spielern und Schlägen zuordnen, einen strukturierten Rohschnitt aufbauen und ihn mit Multicam, Golfgrafiken und Shot-Tracern veredeln. Vollständige Rundenvideos sind das primäre Ergebnis; einzelne Löcher und Social Clips lassen sich daraus ableiten. Die Verarbeitung bleibt lokal und jeder Vorschlag korrigierbar.
+CUT18 macht aus dem Rohmaterial einer Golfrunde ein zusammenhängendes Golfvideo. Statt mit einer leeren generischen Timeline zu beginnen, folgt der Nutzer einem fertigen Schnitt-Playbook: Material sichten, Löchern, Spielern und Schlägen zuordnen, einen strukturierten Rohschnitt aufbauen und ihn mit Multicam, Golfgrafiken und Shot-Tracern veredeln. Vollständige Rundenvideos sind das primäre Ergebnis; einzelne Löcher und Social Clips lassen sich daraus ableiten. Die Verarbeitung bleibt lokal und jeder Vorschlag korrigierbar.
 
 ## Zielgruppen
 

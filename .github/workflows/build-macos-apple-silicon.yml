@@ -34,7 +34,7 @@ jobs:
       - name: Testversion bereitstellen
         uses: actions/upload-artifact@v4
         with:
-          name: Golf-Round-Studio-macOS-Apple-Silicon
+          name: CUT18-macOS-Apple-Silicon
           path: |
             release/*.dmg
             release/*.zip

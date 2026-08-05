@@ -535,7 +535,7 @@ function registerIpc() {
         const result = await dialog.showSaveDialog({
             title: 'Golfprojekt speichern',
             defaultPath: 'Neue Golfrunde.golfcut',
-            filters: [{ name: 'Golf Round Studio Projekt', extensions: ['golfcut'] }],
+            filters: [{ name: 'CUT18 Projekt', extensions: ['golfcut'] }],
         });
         if (result.canceled || !result.filePath)
             return { canceled: true };
@@ -545,7 +545,7 @@ function registerIpc() {
     registerTrustedHandler('project:open', async () => {
         const result = await dialog.showOpenDialog({
             title: 'Golfprojekt öffnen', properties: ['openFile'],
-            filters: [{ name: 'Golf Round Studio Projekt', extensions: ['golfcut'] }],
+            filters: [{ name: 'CUT18 Projekt', extensions: ['golfcut'] }],
         });
         if (result.canceled || !result.filePaths[0])
             return { canceled: true };
@@ -620,7 +620,7 @@ function createWindow() {
         })[character] ?? character);
         const html = `<!doctype html><html lang="de"><meta charset="utf-8"><title>Startfehler</title>
       <body style="margin:0;background:#0a0d0c;color:#f1f5f2;font:16px/1.5 system-ui;padding:48px">
-      <h1 style="color:#79e66d">Golf Round Studio konnte die Oberfläche nicht laden.</h1>
+      <h1 style="color:#79e66d">CUT18 konnte die Oberfläche nicht laden.</h1>
       <p>${safeMessage}</p><p>Bitte die App schließen und das aktuelle Programmpaket erneut entpacken.</p></body></html>`;
         void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
     };

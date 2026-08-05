@@ -1,14 +1,16 @@
 {
-  "name": "golf-round-studio-local",
+  "name": "cut18-local",
   "version": "0.1.2",
   "private": true,
-  "description": "Golf Round Studio – lokale Desktop-App für Windows und macOS",
+  "description": "CUT18 – das lokale Schnitt-Playbook für vollständige Golfvideos",
   "main": "dist-electron/main.js",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:landing": "vite --config vite.landing.config.ts",
     "start": "electron .",
     "build": "vite build",
+    "build:landing": "vite build --config vite.landing.config.ts",
     "test": "vitest run && node --test tools/orchestrator.node-test.mjs tools/lockfile-security.node-test.mjs dist-electron/ipc-validation.node-test.mjs",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run build",
@@ -35,9 +37,9 @@
     "vitest": "^3.2.6"
   },
   "build": {
-    "appId": "de.johannesstuck.golfroundstudio",
-    "productName": "Golf Round Studio",
-    "artifactName": "Golf-Round-Studio-${version}-${os}-${arch}.${ext}",
+    "appId": "de.johannesstuck.cut18",
+    "productName": "CUT18",
+    "artifactName": "CUT18-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "release"
     },
@@ -69,7 +71,7 @@
       "hardenedRuntime": false
     },
     "dmg": {
-      "title": "Golf Round Studio"
+      "title": "CUT18"
     }
   }
 }

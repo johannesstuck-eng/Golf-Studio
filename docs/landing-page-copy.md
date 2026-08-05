@@ -15,7 +15,7 @@ Status: interner Entwurf. Dieser Text autorisiert weder Veröffentlichung noch W
 
 # Von der ganzen Golfrunde zum fertigen Video.
 
-Golf Studio führt dich vom Rohmaterial durch Sichtung, Spieler- und Lochstruktur und einen geordneten Rohschnitt bis zu Multicam, Golfgrafiken, Shot-Tracer und lokalem Export. Du musst keine generische Timeline von Grund auf bauen.
+CUT18 führt dich vom Rohmaterial durch Sichtung, Spieler- und Lochstruktur und einen geordneten Rohschnitt bis zu Multicam, Golfgrafiken, Shot-Tracer und lokalem Export. Du musst keine generische Timeline von Grund auf bauen.
 
 **Primärer CTA:** Für die Windows-Beta vormerken  
 **Sekundärer CTA:** So funktioniert das Playbook
@@ -26,13 +26,13 @@ Der primäre CTA bleibt bis zur ausdrücklichen Freigabe und einer dokumentierte
 
 ## Das Problem
 
-Generische Schnittprogramme verstehen keine Golfrunde. Löcher, Spieler, Schlagreihenfolgen, Score-Daten und mehrere Kameras müssen immer wieder von Hand in einer leeren Timeline organisiert werden. Genau diese wiederkehrende Vorarbeit soll Golf Studio in einen geführten, korrigierbaren Workflow verwandeln.
+Generische Schnittprogramme verstehen keine Golfrunde. Löcher, Spieler, Schlagreihenfolgen, Score-Daten und mehrere Kameras müssen immer wieder von Hand in einer leeren Timeline organisiert werden. Genau diese wiederkehrende Vorarbeit soll CUT18 in einen geführten, korrigierbaren Workflow verwandeln.
 
 ## Das Playbook
 
 1. **Material importieren** – Aufnahmen lokal einlesen; Originaldateien bleiben unverändert.
 2. **Die Runde strukturieren** – Clips Löchern, Spielern und Schlägen zuordnen.
-3. **Den Rohschnitt aufbauen** – Golf Studio bereitet eine nachvollziehbare Reihenfolge vor, die jederzeit korrigiert werden kann.
+3. **Den Rohschnitt aufbauen** – CUT18 bereitet eine nachvollziehbare Reihenfolge vor, die jederzeit korrigiert werden kann.
 4. **Gezielt veredeln** – Multicam, Loch- und Score-Grafiken, Spielerinformationen und Shot-Tracer dort einsetzen, wo sie die Geschichte verbessern.
 5. **Das Golfvideo exportieren** – Das zusammenhängende Video lokal ausgeben und später bei Bedarf einzelne Löcher oder Social Clips ableiten.
 
@@ -61,7 +61,7 @@ Analyse und Verarbeitung sind lokal vorgesehen. Originaldateien werden nicht ver
 
 ## Ehrlicher Beta-Status
 
-Golf Studio ist derzeit ein technischer Windows-Prototyp. Wir validieren den vollständigen Workflow vom Rundenmaterial bis zum lokalen Export mit frühen Testern. Noch nicht behaupten: vollautomatischer Schnitt, fertiges Video mit einem Klick, universelle Kamera- oder Codec-Unterstützung oder öffentliche Verfügbarkeit.
+CUT18 ist derzeit ein technischer Windows-Prototyp. Wir validieren den vollständigen Workflow vom Rundenmaterial bis zum lokalen Export mit frühen Testern. Noch nicht behaupten: vollautomatischer Schnitt, fertiges Video mit einem Klick, universelle Kamera- oder Codec-Unterstützung oder öffentliche Verfügbarkeit.
 
 ## Abschluss
 

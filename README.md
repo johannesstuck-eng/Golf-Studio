@@ -1,6 +1,8 @@
-# Golf Studio
+# CUT18
 
-Golf Studio ist das lokale Schnitt-Playbook für komplette Golfvideos. Die Windows-Desktop-App führt Golfer und Golf-Content-Creator vom Rohmaterial über die Struktur nach Löchern, Spielern und Schlägen zum zusammenhängenden Rohschnitt und ergänzt Multicam, Golf-Overlays und Shot-Tracer innerhalb desselben Workflows. Aus einem Projekt sollen sich vollständige Rundenvideos, einzelne Löcher und Social Clips exportieren lassen. Windows ist die erste Zielplattform; macOS folgt später.
+CUT18 ist das lokale Schnitt-Playbook für komplette Golfvideos. Die Windows-Desktop-App führt Golfer und Golf-Content-Creator vom Rohmaterial über die Struktur nach Löchern, Spielern und Schlägen zum zusammenhängenden Rohschnitt und ergänzt Multicam, Golf-Overlays und Shot-Tracer innerhalb desselben Workflows. Aus einem Projekt sollen sich vollständige Rundenvideos, einzelne Löcher und Social Clips exportieren lassen. Windows ist die erste Zielplattform; macOS folgt später.
+
+**Marke:** CUT18 · **Claim:** Deine Runde. Dein Film. · **vorgesehene URL:** `cut18.app` · **vorgesehener Social-Handle:** `@cut18golf`. Domain und Accounts sind noch nicht registriert.
 
 > Status: technischer Prototyp. Die vorhandenen Funktionen sind eine gute Ausgangsbasis, aber noch kein freigegebenes oder verkaufsfertiges Produkt. Siehe [Produktstatus](docs/product-status.md) und [MVP-Umfang](docs/mvp-scope.md).
 
@@ -61,4 +63,5 @@ Die verbindlichen Regeln stehen in [AGENTS.md](AGENTS.md) und [docs/approval-pol
 - [Architektur](docs/architecture.md)
 - [Business-Hypothesen](docs/business-hypotheses.md)
 - [Landingpage-Textentwurf](docs/landing-page-copy.md)
+- [Markengrundlage](docs/brand.md)
 - [Freigaberichtlinie](docs/approval-policy.md)
