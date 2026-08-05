@@ -88,6 +88,7 @@ export interface MulticamAudioSyncRequest {
 export interface MulticamAudioSyncResult {
     groupId: string;
     referenceMediaId: string | null;
+    referenceByMediaId: Record<string, string>;
     offsetsSeconds: Record<string, number>;
     confidenceByMediaId: Record<string, MulticamSyncConfidence>;
     waveforms: Record<string, number[]>;

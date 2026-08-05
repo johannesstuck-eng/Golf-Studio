@@ -78,3 +78,42 @@ export function confidenceForScore(score, overlapSeconds) {
     if (overlapSeconds >= 5 && score >= .28) return 'medium';
     return 'low';
 }
+
+function rawOverlapSeconds(left, right) {
+    const leftStart = Date.parse(left.recordedAt) / 1000;
+    const rightStart = Date.parse(right.recordedAt) / 1000;
+    return Math.max(0, Math.min(leftStart + left.durationSeconds, rightStart + right.durationSeconds) - Math.max(leftStart, rightStart));
+}
+
+export function alignAudioTracks(tracks, envelopeRate = 50, searchSeconds = 15) {
+    if (!tracks.length) return { referenceMediaId: null, offsetsSeconds: {}, confidenceByMediaId: {}, referenceByMediaId: {}, unmatchedIds: [] };
+    const root = [...tracks].sort((left, right) => right.durationSeconds - left.durationSeconds)[0];
+    const offsetsSeconds = { [root.id]: 0 };
+    const confidenceByMediaId = { [root.id]: 'high' };
+    const referenceByMediaId = { [root.id]: root.id };
+    const unmatched = new Set(tracks.filter((track) => track.id !== root.id).map((track) => track.id));
+    const attempted = new Set();
+    while (unmatched.size) {
+        let bestPair = null;
+        for (const anchor of tracks.filter((track) => offsetsSeconds[track.id] !== undefined)) {
+            for (const target of tracks.filter((track) => unmatched.has(track.id))) {
+                const key = `${anchor.id}:${target.id}`;
+                if (attempted.has(key)) continue;
+                const overlap = rawOverlapSeconds(anchor, target);
+                if (!bestPair || overlap > bestPair.overlap) bestPair = { anchor, target, overlap, key };
+            }
+        }
+        if (!bestPair || bestPair.overlap < 5) break;
+        attempted.add(bestPair.key);
+        const rawDifference = (Date.parse(bestPair.target.recordedAt) - Date.parse(bestPair.anchor.recordedAt)) / 1000;
+        const match = findAudioSyncOffset(bestPair.anchor.envelope, bestPair.target.envelope, rawDifference, envelopeRate, searchSeconds);
+        const confidence = confidenceForScore(match.score, match.overlapSeconds);
+        if (confidence === 'low') continue;
+        offsetsSeconds[bestPair.target.id] = Math.round((offsetsSeconds[bestPair.anchor.id] + match.offsetSeconds) * 1000) / 1000;
+        confidenceByMediaId[bestPair.target.id] = confidence;
+        referenceByMediaId[bestPair.target.id] = bestPair.anchor.id;
+        unmatched.delete(bestPair.target.id);
+    }
+    for (const id of unmatched) confidenceByMediaId[id] = 'low';
+    return { referenceMediaId: root.id, offsetsSeconds, confidenceByMediaId, referenceByMediaId, unmatchedIds: [...unmatched] };
+}

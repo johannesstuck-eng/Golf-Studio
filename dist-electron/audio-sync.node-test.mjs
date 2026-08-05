@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { compactWaveform, confidenceForScore, findAudioSyncOffset, pcm16Envelope } from './audio-sync.js';
+import { alignAudioTracks, compactWaveform, confidenceForScore, findAudioSyncOffset, pcm16Envelope } from './audio-sync.js';
 
 test('audio correlation recovers a delayed camera offset', () => {
     let state = 42;
@@ -22,4 +22,21 @@ test('PCM envelope and compact waveform stay bounded', () => {
     const compact = compactWaveform(envelope, 20);
     assert.ok(compact.length <= 20);
     assert.ok(compact.every((value) => value >= 0 && value <= 1));
+});
+
+test('audio alignment follows a chain of overlapping clips', () => {
+    let state = 9;
+    const global = Array.from({ length: 3000 }, () => {
+        state = (1103515245 * state + 12345) >>> 0;
+        return state / 0xffffffff - .5;
+    });
+    const tracks = [
+        { id: 'a', recordedAt: '2026-08-05T10:00:00.000Z', durationSeconds: 30, envelope: global.slice(0, 1500) },
+        { id: 'b', recordedAt: '2026-08-05T10:00:25.000Z', durationSeconds: 25, envelope: global.slice(1250, 2500) },
+        { id: 'c', recordedAt: '2026-08-05T10:00:45.000Z', durationSeconds: 15, envelope: global.slice(2250, 3000) },
+    ];
+    const result = alignAudioTracks(tracks, 50, 2);
+    assert.deepEqual(result.offsetsSeconds, { a: 0, b: 0, c: 0 });
+    assert.equal(result.referenceByMediaId.c, 'b');
+    assert.deepEqual(result.unmatchedIds, []);
 });
