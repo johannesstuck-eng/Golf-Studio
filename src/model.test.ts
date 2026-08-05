@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, setScorecardSource, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence } from './model';
-import type { ProjectSettings } from './types';
+import { addBlock, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, setScorecardSource, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence } from './model';
+import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
     id: 'round',
@@ -92,6 +92,36 @@ describe('project model', () => {
         const joeSequence = project.sequences.find((sequence) => sequence.sourceId === 'shared' && sequence.inFrame === 300)!;
         project = upsertSequence(project, { id: joeSequence.id, sourceType: 'media', sourceId: 'early', inFrame: 0, outFrame: 60, sourceFps: 30, hole: 1, playerId: 'joe', blockType: 'tee-shot' });
         expect(automaticPlayerOrder(project, 1, 0)).toEqual(['joe', 'ferdi']);
+    });
+
+    it('suggests multicam groups for parallel DJI filename families from the same reported device', () => {
+        const base = {
+            kind: 'video' as const,
+            path: 'C:\\Clips\\round',
+            device: 'DJI Osmo Pocket',
+            deviceKey: 'dji-osmo-pocket:round',
+            width: 3840,
+            height: 2160,
+            fps: 59.94,
+            codec: 'h264',
+            audioCodec: 'aac',
+            hasAudio: true,
+            sizeBytes: 1000,
+        };
+        const media: MediaItem[] = [
+            { ...base, id: 'classic-853', name: 'DJI_0853.MP4', recordedAt: '2026-08-05T09:03:21.000Z', durationSeconds: 180 },
+            { ...base, id: 'timestamp-47', name: 'DJI_20260805110321_0047_D.MP4', recordedAt: '2026-08-05T09:03:21.000Z', durationSeconds: 182 },
+            { ...base, id: 'timestamp-48', name: 'DJI_20260805110816_0048_D.MP4', recordedAt: '2026-08-05T09:08:17.000Z', durationSeconds: 591 },
+            { ...base, id: 'classic-854-1', name: 'DJI_0854_001.MP4', recordedAt: '2026-08-05T09:08:19.000Z', durationSeconds: 327 },
+            { ...base, id: 'classic-854-2', name: 'DJI_0854_002.MP4', recordedAt: '2026-08-05T09:13:47.000Z', durationSeconds: 247 },
+        ];
+
+        const suggestions = suggestMulticam(media);
+
+        expect(suggestions).toHaveLength(2);
+        expect(suggestions[0].mediaIds).toEqual(['classic-853', 'timestamp-47']);
+        expect(suggestions[1].mediaIds).toEqual(['timestamp-48', 'classic-854-1', 'classic-854-2']);
+        expect(suggestions.every((suggestion) => suggestion.confidence === 'high')).toBe(true);
     });
 
     it('stores course, scorecard, score and shot metadata', () => {
