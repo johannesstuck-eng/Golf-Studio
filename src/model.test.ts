@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence } from './model';
+import { addBlock, applyScorecardTee, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence } from './model';
 import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
@@ -197,6 +197,28 @@ describe('project model', () => {
         expect(project.courseData.holes[0]).toMatchObject({ par: 5, lengthMeters: 487, strokeIndex: 3, teeColor: 'Gelb' });
         expect(project.blocks.find((item) => item.id === block.id)?.details).toMatchObject({ club: 'Driver', distanceMeters: 238, result: 'Fairway' });
         expect(playerScoreToPar(project, 'joe', 1)).toBe(1);
+    });
+
+    it('applies a complete reviewed scorecard tee without changing player scores', () => {
+        const project = updatePlayerScore(createProject(settings), 1, 'joe', 5);
+        const tee = {
+            id: 'tee-gelb',
+            label: 'Gelb',
+            holes: project.courseData.holes.map((hole) => ({
+                number: hole.number,
+                sourceLabel: `A${hole.number}`,
+                par: hole.number === 1 ? 5 : 4,
+                lengthMeters: 300 + hole.number,
+                strokeIndex: hole.number,
+            })),
+        };
+        const updated = applyScorecardTee(project, 'C:\\scorecards\\eichenried.pdf', tee);
+        expect(updated.courseData.scorecardSourcePath).toContain('eichenried.pdf');
+        expect(updated.courseData.holes[0]).toMatchObject({ par: 5, lengthMeters: 301, strokeIndex: 1, teeColor: 'Gelb' });
+        expect(updated.playerScores).toEqual(project.playerScores);
+
+        const incomplete = applyScorecardTee(project, 'C:\\scorecards\\broken.pdf', { ...tee, holes: tee.holes.slice(0, -1) });
+        expect(incomplete).toBe(project);
     });
 
     it('clamps overlay timing and upgrades missing overlay positions', () => {

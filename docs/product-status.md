@@ -12,6 +12,7 @@ Der vorhandene Code ist deutlich weiter als ein leerer Baseline-Prototyp. Er ent
 - lokaler Video- und Audioimport über Electron-IPC
 - `.golfcut`-Projektmodell mit Schema-Migration
 - Round Builder mit Zuordnung nach Loch, Spieler und Schlagblock
+- lokale PDF-Scorecard-Erkennung mit Abschlagsauswahl und kontrollierter Übernahme von Par, Länge und Vorgabe
 - automatische Spielerreihenfolge und strukturierter Rohschnitt
 - framebasierte virtuelle Sequenzen, Golfblöcke und Multicam-Vorschläge
 - fester Editorial-Look mit Loch-, Score-, Spieler- und Schlaginformationen
@@ -29,6 +30,7 @@ Der vorhandene Code ist deutlich weiter als ein leerer Baseline-Prototyp. Er ent
 - signierte Builds und Update-Strategie
 - getestete Barrierefreiheit und vollständige UX-Validierung
 - Beta-Programm, Preis oder Vertriebsprozess
+- automatische Erkennung fotografierter oder gescannter Scorecards
 
 ## Wichtigster aktueller Engpass
 

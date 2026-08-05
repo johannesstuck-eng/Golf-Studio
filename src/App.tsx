@@ -6,7 +6,7 @@ import {
     Crosshair, Scissors, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Trophy, Users, WandSparkles, X,
 } from 'lucide-react';
 import {
-    addBlock, blockLabel, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
+    addBlock, applyScorecardTee, blockLabel, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
     effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence,
     multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia,
     suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore,
@@ -28,6 +28,7 @@ import {
     type OverlayPosition,
     type OverlayType,
     type ProjectSettings,
+    type ScorecardChooseResult,
     type ShotTracerEffect,
     type CameraLockPoint,
     type ShotTracerCameraLock,
@@ -569,22 +570,53 @@ const nullableNumber = (value: string): number | null => value === '' ? null : N
 
 function ScorecardEditor({ project, setProject, onClose }: { project: GolfProject; setProject: (project: GolfProject) => void; onClose: () => void }) {
     const [message, setMessage] = useState('');
+    const [analysis, setAnalysis] = useState<ScorecardChooseResult | null>(null);
+    const [selectedTeeId, setSelectedTeeId] = useState('');
+    const [analyzing, setAnalyzing] = useState(false);
     const chooseScorecard = async () => {
         if (!window.golfStudio) return setMessage('Dateiauswahl ist nur in der Desktop-App verfügbar.');
+        setAnalyzing(true);
+        setMessage('Scorecard wird lokal analysiert …');
         try {
-            const result = await window.golfStudio.chooseScorecard();
-            if (!result.canceled && result.path) setProject(setScorecardSource(project, result.path));
-        } catch (error) { setMessage(error instanceof Error ? error.message : 'Scorecard konnte nicht ausgewählt werden.'); }
+            const result = await window.golfStudio.chooseScorecard(project.settings.holes);
+            if (result.canceled || !result.path) return setMessage('Keine Scorecard ausgewählt.');
+            setAnalysis(result);
+            setSelectedTeeId(result.tees[0]?.id ?? '');
+            if (result.status === 'ready') {
+                setMessage(`${result.tees[0]?.holes.length ?? 0} Löcher und ${result.tees.length} Abschläge erkannt. Bitte Abschlag prüfen und übernehmen.`);
+            } else {
+                setProject(setScorecardSource(project, result.path));
+                setMessage(result.warnings[0] ?? 'Diese Scorecard muss manuell übertragen werden.');
+            }
+        } catch (error) { setMessage(error instanceof Error ? error.message : 'Scorecard konnte nicht analysiert werden.'); }
+        finally { setAnalyzing(false); }
     };
-    const sourceName = project.courseData.scorecardSourcePath?.split(/[\\/]/).pop();
+    const selectedTee = analysis?.tees.find((tee) => tee.id === selectedTeeId);
+    const sourcePath = analysis?.path ?? project.courseData.scorecardSourcePath;
+    const sourceName = sourcePath?.split(/[\\/]/).pop();
+    const isImage = Boolean(sourcePath && /\.(png|jpe?g|webp)$/i.test(sourcePath));
+    const applyRecognizedData = () => {
+        if (!selectedTee || !analysis?.path) return;
+        const updated = applyScorecardTee(project, analysis.path, selectedTee);
+        if (updated === project) return setMessage('Die erkannten Lochdaten sind nicht vollständig und wurden nicht übernommen.');
+        setProject(updated);
+        setMessage(`${selectedTee.holes.length} Löcher · Abschlag ${selectedTee.label} übernommen.`);
+        setAnalysis(null);
+    };
     return <div className="data-editor-backdrop"><section className="scorecard-editor"><header><div><div className="eyebrow"><span /> PLATZDATEN</div><h2>Scorecard · {project.settings.course}</h2><p>Diese Daten speisen Loch-, Score- und Leaderboard-Grafiken.</p></div><button className="preview-close" onClick={onClose}><X size={18} /></button></header>
-        <div className="scorecard-source"><div><ClipboardList size={20} /><span><b>{sourceName ?? 'Keine Scorecard hinterlegt'}</b><small>{sourceName ? 'Lokal mit diesem Projekt verknüpft' : 'PDF oder Foto als Referenz auswählen'}</small></span></div><button className="secondary" onClick={chooseScorecard}><ImageUp size={15} /> Scorecard auswählen</button></div>
+        <div className="scorecard-source"><div><ClipboardList size={20} /><span><b>{sourceName ?? 'Keine Scorecard hinterlegt'}</b><small>{sourceName ? 'Bleibt lokal auf diesem Rechner' : 'PDF oder Foto als Referenz auswählen'}</small></span></div><button className="secondary" disabled={analyzing} onClick={chooseScorecard}><ImageUp size={15} /> {analyzing ? 'Analysiere …' : 'Scorecard auswählen'}</button></div>
         {message && <div className="inline-message">{message}</div>}
+        {analysis?.status === 'ready' && selectedTee && <section className="scorecard-analysis"><div className="scorecard-analysis-heading"><div><span>LOKAL ERKANNT</span><h3>Welchen Abschlag habt ihr gespielt?</h3><p>Wähle einen Abschlag und prüfe die Werte. Erst der grüne Button übernimmt sie ins Projekt.</p></div><ShieldCheck size={25} /></div><div className="scorecard-tee-options">{analysis.tees.map((tee) => {
+            const totalMeters = tee.holes.reduce((sum, hole) => sum + hole.lengthMeters, 0);
+            const totalPar = tee.holes.reduce((sum, hole) => sum + hole.par, 0);
+            return <button className={tee.id === selectedTeeId ? 'active' : ''} onClick={() => setSelectedTeeId(tee.id)} key={tee.id}><b>{tee.label}</b><small>{totalMeters.toLocaleString('de-DE')} m · Par {totalPar}</small></button>;
+        })}</div><div className="scorecard-analysis-preview">{selectedTee.holes.map((hole) => <span key={hole.number}><b>{hole.number}</b><small>Par {hole.par}</small><em>{hole.lengthMeters} m</em></span>)}</div><button className="primary scorecard-apply" onClick={applyRecognizedData}><Check size={16} /> Abschlag {selectedTee.label} und {selectedTee.holes.length} Löcher übernehmen</button></section>}
+        {analysis?.status === 'manual' && isImage && sourcePath && <div className="scorecard-reference-preview"><img src={fileUrl(sourcePath)} alt="Ausgewählte Scorecard" /><p>Foto bereit zur manuellen Übertragung. Eine automatische Fotoerkennung ist noch nicht aktiv.</p></div>}
         <div className="scorecard-table" style={{ gridTemplateColumns: `55px 85px 100px 75px 110px repeat(${project.settings.players.length}, minmax(95px, 1fr))` }}><div className="scorecard-head"><span>LOCH</span><span>PAR</span><span>LÄNGE (M)</span><span>HCP</span><span>ABSCHLAG</span>{project.settings.players.map((player) => <span key={player.id}>SCORE {player.name.toUpperCase()}</span>)}</div>{project.courseData.holes.map((hole) => <div className="scorecard-row" key={hole.number}><b>{hole.number}</b><select value={hole.par} onChange={(event) => setProject(updateHoleData(project, hole.number, { par: Number(event.target.value) }))}>{[3, 4, 5, 6].map((par) => <option value={par} key={par}>Par {par}</option>)}</select><input type="number" min={0} value={hole.lengthMeters ?? ''} placeholder="–" onChange={(event) => setProject(updateHoleData(project, hole.number, { lengthMeters: nullableNumber(event.target.value) }))} /><input type="number" min={1} max={project.settings.holes} value={hole.strokeIndex ?? ''} placeholder="–" onChange={(event) => setProject(updateHoleData(project, hole.number, { strokeIndex: nullableNumber(event.target.value) }))} /><input value={hole.teeColor} placeholder="z. B. Gelb" onChange={(event) => setProject(updateHoleData(project, hole.number, { teeColor: event.target.value }))} />{project.settings.players.map((player) => {
             const score = project.playerScores.find((item) => item.hole === hole.number && item.playerId === player.id);
             return <input type="number" min={1} value={score?.strokes ?? ''} placeholder="–" aria-label={`Score ${player.name} Loch ${hole.number}`} onChange={(event) => setProject(updatePlayerScore(project, hole.number, player.id, nullableNumber(event.target.value)))} key={player.id} />;
         })}</div>)}</div>
-        <footer><p>Die Datei dient aktuell als lokale Referenz. Automatisches Auslesen mit Kontrollansicht folgt separat.</p><button className="primary" onClick={onClose}><Check size={15} /> Fertig</button></footer>
+        <footer><p>PDF-Werte werden nur nach deiner Bestätigung übernommen. Fotos bleiben vorerst eine manuelle Vorlage.</p><button className="primary" onClick={onClose}><Check size={15} /> Fertig</button></footer>
     </section></div>;
 }
 

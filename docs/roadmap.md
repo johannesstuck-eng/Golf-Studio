@@ -18,6 +18,8 @@ Prioritäten sind Hypothesen und werden nach Tests neu bewertet.
 - [ ] FFmpeg/FFprobe-Erkennung und verständliche Diagnose
 - [ ] Projektformat spezifizieren und Migrationstests erweitern
 - [ ] Round-Builder und Golfstruktur als klaren MVP-Kernpfad validieren
+- [x] textbasierte PDF-Scorecards lokal auslesen und vor der Übernahme kontrollieren
+- [ ] Foto-/Scan-Scorecards zuverlässig erkennen
 - [ ] automatische Spieler- und Schlagreihenfolge für einen zusammenhängenden Rohschnitt validieren
 - [ ] Export-Pipeline mit echten Golden-Sample-Tests prüfen
 

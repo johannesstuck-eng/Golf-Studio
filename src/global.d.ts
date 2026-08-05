@@ -1,4 +1,4 @@
-import type { ExportProgress, ExportRequest, GolfProject, MediaEngineStatus, MediaItem, MulticamAudioSyncRequest, MulticamAudioSyncResult, MulticamSyncProgress } from './types';
+import type { ExportProgress, ExportRequest, GolfProject, MediaEngineStatus, MediaItem, MulticamAudioSyncRequest, MulticamAudioSyncResult, MulticamSyncProgress, ScorecardChooseResult } from './types';
 
 declare global {
     interface Window {
@@ -13,7 +13,7 @@ declare global {
             onMulticamSyncProgress: (callback: (progress: MulticamSyncProgress) => void) => () => void;
             saveProject: (project: GolfProject) => Promise<{ canceled: boolean; path?: string }>;
             openProject: () => Promise<{ canceled: boolean; path?: string; project?: unknown }>;
-            chooseScorecard: () => Promise<{ canceled: boolean; path?: string }>;
+            chooseScorecard: (holes: 9 | 18) => Promise<ScorecardChooseResult>;
             exportVideo: (request: ExportRequest) => Promise<{ canceled: boolean; path?: string; error?: string }>;
             cancelExport: () => Promise<{ canceled: boolean }>;
             onExportProgress: (callback: (progress: ExportProgress) => void) => () => void;

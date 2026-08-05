@@ -156,6 +156,31 @@ export interface CourseData {
     holes: HoleData[];
 }
 
+export interface ScorecardHoleCandidate {
+    number: number;
+    sourceLabel: string;
+    par: number;
+    lengthMeters: number;
+    strokeIndex: number;
+}
+
+export interface ScorecardTeeCandidate {
+    id: string;
+    label: string;
+    holes: ScorecardHoleCandidate[];
+}
+
+export interface ScorecardAnalysis {
+    status: 'ready' | 'manual';
+    tees: ScorecardTeeCandidate[];
+    warnings: string[];
+}
+
+export interface ScorecardChooseResult extends ScorecardAnalysis {
+    canceled: boolean;
+    path?: string;
+}
+
 export interface VirtualSequence {
     id: string;
     sourceType: SourceType;

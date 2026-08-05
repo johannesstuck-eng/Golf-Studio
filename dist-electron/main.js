@@ -12,6 +12,7 @@ import { createMediaChooseHandler, createMediaEngineDiagnostics, MediaEngineErro
 import { exportMediaForSequence, exportRangeForSequence } from './multicam-export.js';
 import { alignAudioTracks, compactWaveform, pcm16Envelope } from './audio-sync.js';
 import { tracerFrameAtProgress } from './tracer-timing.js';
+import { analyzeScorecard } from './scorecard-analysis.js';
 const execFileAsync = promisify(execFile);
 const mediaExtensions = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mkv', '.wav', '.mp3', '.m4a', '.aac', '.flac']);
 const audioExtensions = new Set(['.wav', '.mp3', '.m4a', '.aac', '.flac']);
@@ -618,7 +619,7 @@ function registerIpc() {
             throw new IpcValidationError('Projektdatei enthält kein gültiges Projektobjekt.');
         return { canceled: false, path: filePath, project };
     });
-    registerTrustedHandler('scorecard:choose', async () => {
+    registerTrustedHandler('scorecard:choose', async (_event, holeCount) => {
         const result = await dialog.showOpenDialog({
             title: 'Scorecard auswählen',
             properties: ['openFile'],
@@ -626,9 +627,10 @@ function registerIpc() {
                 { name: 'Scorecard (Bild oder PDF)', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'webp'] },
             ],
         });
-        return result.canceled || !result.filePaths[0]
-            ? { canceled: true }
-            : { canceled: false, path: result.filePaths[0] };
+        if (result.canceled || !result.filePaths[0]) return { canceled: true, status: 'manual', tees: [], warnings: [] };
+        const scorecardPath = result.filePaths[0];
+        const analysis = await analyzeScorecard(scorecardPath, holeCount);
+        return { canceled: false, path: scorecardPath, ...analysis };
     });
     registerTrustedHandler('export:start', async (event, requestValue) => {
         if (activeExportProcess)

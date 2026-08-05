@@ -11,6 +11,7 @@ import {
     type OverlayType,
     type PlayerHoleScore,
     type ProjectSettings,
+    type ScorecardTeeCandidate,
     type SequenceDraft,
     type ShotDetails,
     type ShotTracerEffect,
@@ -483,6 +484,30 @@ export function updateHoleData(project: GolfProject, holeNumber: number, patch: 
 
 export function setScorecardSource(project: GolfProject, scorecardSourcePath: string | null): GolfProject {
     return { ...project, courseData: { ...project.courseData, scorecardSourcePath }, modifiedAt: new Date().toISOString() };
+}
+
+export function applyScorecardTee(project: GolfProject, scorecardSourcePath: string, tee: ScorecardTeeCandidate): GolfProject {
+    const holesByNumber = new Map(tee.holes.map((hole) => [hole.number, hole]));
+    const complete = tee.holes.length === project.settings.holes
+        && project.courseData.holes.every((hole) => holesByNumber.has(hole.number));
+    if (!complete) return project;
+    return {
+        ...project,
+        courseData: {
+            scorecardSourcePath,
+            holes: project.courseData.holes.map((hole) => {
+                const imported = holesByNumber.get(hole.number)!;
+                return {
+                    ...hole,
+                    par: imported.par,
+                    lengthMeters: imported.lengthMeters,
+                    strokeIndex: imported.strokeIndex,
+                    teeColor: tee.label,
+                };
+            }),
+        },
+        modifiedAt: new Date().toISOString(),
+    };
 }
 
 export function updatePlayerScore(project: GolfProject, hole: number, playerId: string, strokes: number | null): GolfProject {

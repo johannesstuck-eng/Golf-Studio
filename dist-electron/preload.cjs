@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('golfStudio', {
     },
     saveProject: (project) => ipcRenderer.invoke('project:save', project),
     openProject: () => ipcRenderer.invoke('project:open'),
-    chooseScorecard: () => ipcRenderer.invoke('scorecard:choose'),
+    chooseScorecard: (holes) => ipcRenderer.invoke('scorecard:choose', holes),
     exportVideo: (request) => ipcRenderer.invoke('export:start', request),
     cancelExport: () => ipcRenderer.invoke('export:cancel'),
     onExportProgress: (callback) => {
