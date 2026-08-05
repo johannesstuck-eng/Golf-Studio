@@ -135,6 +135,17 @@ export function validateProject(projectValue) {
         const id = string(group.id, `project.groups[${index}].id`, 128);
         const ids = uniqueStrings(group.mediaIds, `project.groups[${index}].mediaIds`, limits.media);
         if (ids.some((mediaId) => !mediaIds.has(mediaId))) fail(`project.groups[${index}].mediaIds`, 'Unbekannte Medien-ID.');
+        if (group.syncStatus !== undefined) enumeration(group.syncStatus, `project.groups[${index}].syncStatus`, new Set(['timestamp-only', 'manual', 'audio']));
+        if (group.syncOffsetsSeconds !== undefined) {
+            const offsets = record(group.syncOffsetsSeconds, `project.groups[${index}].syncOffsetsSeconds`);
+            const entries = Object.entries(offsets);
+            entries.forEach(([mediaId, seconds]) => {
+                string(mediaId, `project.groups[${index}].syncOffsetsSeconds`, 128);
+                if (!ids.includes(mediaId)) fail(`project.groups[${index}].syncOffsetsSeconds.${mediaId}`, 'Kamera gehört nicht zur Multicam-Gruppe.');
+                finite(seconds, `project.groups[${index}].syncOffsetsSeconds.${mediaId}`, -3600, 3600);
+            });
+            if (entries.length > ids.length) fail(`project.groups[${index}].syncOffsetsSeconds`, 'Zu viele Kamera-Versätze.');
+        }
         groupMediaIds.set(id, new Set(ids));
         return id;
     }));

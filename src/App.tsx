@@ -8,7 +8,7 @@ import {
 import {
     addBlock, blockLabel, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
     effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence,
-    multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setScorecardSource,
+    multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setScorecardSource,
     suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore,
     updateSequenceOverlay, updateShotTracer, upsertSequence,
 } from './model';
@@ -322,6 +322,7 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
     const source = sourceType === 'media'
         ? project.media.find((media) => media.id === sourceId)
         : groupMedia.find((media) => media.id === activeMediaId) ?? groupMedia[0];
+    const activeSyncOffset = sourceType === 'group' && source ? multicamSyncOffset(project, sourceId, source.id) : 0;
     const fps = sourceType === 'group'
         ? groupTimeline?.fps ?? project.settings.frameRate ?? 30
         : source?.fps && source.fps > 0 ? source.fps : project.settings.frameRate ?? 30;
@@ -336,9 +337,9 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
     const targetBlock = matchingBlocks.find((block) => block.id === targetBlockId) ?? matchingBlocks[0];
     const mediaTimeForFrame = useCallback((frame: number, media: MediaItem): number => {
         if (sourceType !== 'group' || !groupTimeline) return frame / fps;
-        const offsetSeconds = (Date.parse(media.recordedAt) - groupTimeline.startMs) / 1000;
+        const offsetSeconds = (multicamMediaStartMs(project, sourceId, media) - groupTimeline.startMs) / 1000;
         return Math.min(media.durationSeconds, Math.max(0, frame / fps - offsetSeconds));
-    }, [fps, groupTimeline, sourceType]);
+    }, [fps, groupTimeline, project, sourceId, sourceType]);
     const seek = useCallback((frame: number) => {
         const target = Math.min(maxFrames, Math.max(0, Math.round(frame)));
         setCurrentFrame(target);
@@ -362,7 +363,7 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
     useEffect(() => {
         if (!matchingBlocks.some((block) => block.id === targetBlockId)) setTargetBlockId(matchingBlocks[0]?.id ?? '');
     }, [matchingBlocks, targetBlockId]);
-    useEffect(() => { if (source) seek(currentFrame); }, [activeMediaId]);
+    useEffect(() => { if (source) seek(currentFrame); }, [activeMediaId, activeSyncOffset]);
     useEffect(() => {
         const key = (event: KeyboardEvent) => {
             if ((event.target as HTMLElement)?.matches('input, select, textarea')) return;
@@ -379,7 +380,7 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
     const playRange = () => { seek(inFrame); setPlaySelection(true); window.setTimeout(() => void player()?.play(), 0); };
     const frameFromMediaTime = (media: MediaItem, localSeconds: number) => {
         if (sourceType !== 'group' || !groupTimeline) return Math.round(localSeconds * fps);
-        const offsetSeconds = (Date.parse(media.recordedAt) - groupTimeline.startMs) / 1000;
+        const offsetSeconds = (multicamMediaStartMs(project, sourceId, media) - groupTimeline.startMs) / 1000;
         return Math.round((offsetSeconds + localSeconds) * fps);
     };
     const handleTimeUpdate = (element: HTMLMediaElement, media: MediaItem) => {
@@ -406,12 +407,19 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
         if (!target) return;
         setEditingId(sequence.id); setInFrame(sequence.inFrame); setOutFrame(sequence.outFrame); setHole(target.hole); setPlayerId(target.playerId); setBlockType(target.type); setTargetBlockId(target.id); setActiveMediaId(sequence.activeMediaId ?? ''); seek(sequence.inFrame); setMessage('');
     };
+    const adjustSync = (nextOffset: number) => {
+        if (sourceType !== 'group' || !source) return;
+        player()?.pause();
+        setProject(setMulticamSyncOffset(project, sourceId, source.id, nextOffset));
+        setMessage(`Synchronisierung für ${source.name}: ${nextOffset >= 0 ? '+' : ''}${nextOffset.toFixed(2)} s`);
+    };
     return <section className="review-workspace">
         <aside className="source-browser"><div className="source-tabs"><button className={sourceType === 'media' ? 'active' : ''} onClick={() => { setSourceType('media'); setSourceId(project.media[0]?.id ?? ''); }}>Clips</button><button className={sourceType === 'group' ? 'active' : ''} onClick={() => { setSourceType('group'); setSourceId(project.groups[0]?.id ?? ''); }}>Multicam</button></div>
             <div className="source-list">{sourceType === 'media' ? project.media.map((media) => <button className={sourceId === media.id ? 'active' : ''} onClick={() => setSourceId(media.id)} key={media.id}><MediaIcon media={media} /><span><b>{media.name}</b><small>{formatDuration(media.durationSeconds)} · {media.fps ?? '?'} fps</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'media' && sequence.sourceId === media.id).length}</em></button>) : project.groups.map((group) => <button className={sourceId === group.id ? 'active' : ''} onClick={() => setSourceId(group.id)} key={group.id}><div className="group-icon"><Layers size={20} /></div><span><b>{group.name}</b><small>{group.mediaIds.length} Quellen</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'group' && sequence.sourceId === group.id).length}</em></button>)}</div>
         </aside>
         <div className="review-main">{source ? <><div className="review-heading"><div><div className="eyebrow"><span /> SICHTEN & ZUWEISEN</div><h1>{sourceType === 'group' ? project.groups.find((group) => group.id === sourceId)?.name : source.name}</h1><p>{sourceType === 'group' ? `${groupMedia.length} synchronisierte Kameras · aktive Perspektive: ${source.name}` : `${source.device} · ${source.width ?? 'Audio'}${source.height ? `×${source.height}` : ''} · ${fps} fps`}</p></div><div className="keyboard-hints"><kbd>←</kbd><kbd>→</kbd> Frame · <kbd>I</kbd> In · <kbd>O</kbd> Out · <kbd>Leertaste</kbd> Play</div></div>
             {sourceType === 'group' && <div className="camera-monitor-grid">{groupMedia.map((media, index) => <button className={media.id === source.id ? 'active' : ''} onClick={() => { player()?.pause(); setActiveMediaId(media.id); }} key={media.id}><video muted preload="metadata" src={fileUrl(media.path)} ref={(element) => { if (element) previewRefs.current.set(media.id, element); else previewRefs.current.delete(media.id); }} onLoadedMetadata={(event) => { event.currentTarget.currentTime = mediaTimeForFrame(currentFrame, media); }} /><span><b>Kamera {index + 1}</b><small>{media.name} · {media.device}</small></span>{media.id === source.id && <em>AKTIV</em>}</button>)}</div>}
+            {sourceType === 'group' && <div className="multicam-sync-bar"><div><b>Feinsynchronisierung · {source.name}</b><small>Video an einem sichtbaren Ereignis anhalten. „+“ zeigt einen späteren, „−“ einen früheren Moment dieser Kamera.</small></div><div className="sync-step-buttons"><button onClick={() => adjustSync(activeSyncOffset - 1)}>−1 s</button><button onClick={() => adjustSync(activeSyncOffset - .1)}>−0,1 s</button><output>{activeSyncOffset >= 0 ? '+' : ''}{activeSyncOffset.toFixed(2)} s</output><button onClick={() => adjustSync(activeSyncOffset + .1)}>+0,1 s</button><button onClick={() => adjustSync(activeSyncOffset + 1)}>+1 s</button><button className="sync-reset" onClick={() => adjustSync(0)}><RotateCcw size={14} /> Null</button></div></div>}
             <div className="viewer-shell"><div className="viewer">{source.kind === 'video' ? <video ref={videoRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => handleTimeUpdate(event.currentTarget, source)} onError={() => setMessage('Die Mediendatei konnte nicht geöffnet werden. Prüfe, ob sie noch am gespeicherten Ort liegt.')} /> : <div className="audio-view"><FileAudio size={70} /><b>{source.name}</b><audio ref={audioRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => handleTimeUpdate(event.currentTarget, source)} /></div>}<button className="viewer-play" onClick={togglePlay}>{playing ? <Pause size={25} /> : <Play size={25} />}</button></div>
                 <div className="transport"><button onClick={() => seek(currentFrame - 1)} title="Ein Frame zurück"><ChevronLeft size={20} /></button><button className="transport-play" onClick={togglePlay}>{playing ? <Pause size={18} /> : <Play size={18} />}</button><button onClick={() => seek(currentFrame + 1)} title="Ein Frame vor"><ChevronRight size={20} /></button><strong>{frameTime(currentFrame, fps)}</strong><span>Frame {currentFrame} / {maxFrames}</span></div>
                 <Filmstrip currentFrame={currentFrame} inFrame={inFrame} outFrame={outFrame} maxFrames={maxFrames} sequences={sourceSequences} onSeek={seek} onInChange={(frame) => setInFrame(Math.min(frame, outFrame - 1))} onOutChange={(frame) => setOutFrame(Math.max(frame, inFrame + 1))} />

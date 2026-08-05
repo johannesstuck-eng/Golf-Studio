@@ -75,6 +75,7 @@ export interface MulticamGroup {
     mediaIds: string[];
     createdAt: string;
     syncStatus: 'timestamp-only' | 'manual' | 'audio';
+    syncOffsetsSeconds?: Record<string, number>;
 }
 
 export interface GolfBlock {
