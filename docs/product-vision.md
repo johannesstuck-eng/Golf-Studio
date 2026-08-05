@@ -6,7 +6,7 @@ Golf-Aufnahmen bestehen häufig aus langen, unübersichtlichen Clips. Allgemeine
 
 ## Vision
 
-Golf Studio macht aus lokal aufgenommenen Golfvideos in wenigen nachvollziehbaren Schritten eine strukturierte Runde oder einen kurzen Social-Media-Clip. Das Produkt kombiniert einen golfzentrierten Workflow mit lokaler Videoverarbeitung und lässt dem Nutzer jederzeit Kontrolle über Schnitt und Effekte.
+Golf Studio macht aus dem Rohmaterial einer Golfrunde ein zusammenhängendes Golfvideo. Statt mit einer leeren generischen Timeline zu beginnen, folgt der Nutzer einem fertigen Schnitt-Playbook: Material sichten, Löchern, Spielern und Schlägen zuordnen, einen strukturierten Rohschnitt aufbauen und ihn mit Multicam, Golfgrafiken und Shot-Tracern veredeln. Vollständige Rundenvideos sind das primäre Ergebnis; einzelne Löcher und Social Clips lassen sich daraus ableiten. Die Verarbeitung bleibt lokal und jeder Vorschlag korrigierbar.
 
 ## Zielgruppen
 
@@ -19,9 +19,10 @@ Golf Studio macht aus lokal aufgenommenen Golfvideos in wenigen nachvollziehbare
 - **Golf statt generischer Timeline:** Löcher, Spieler und Schläge sind primäre Objekte.
 - **Lokal zuerst:** Originalvideos und Projekte bleiben standardmäßig auf dem Gerät.
 - **Ehrliche Automatisierung:** Vorschläge sind sichtbar, korrigierbar und werden nicht als Gewissheit dargestellt.
-- **Schneller Weg zum Ergebnis:** Gute Standardwerte vor komplexer Konfiguration.
+- **Playbook statt leerer Timeline:** Der Workflow führt vom ungeordneten Rundenmaterial zum zusammenhängenden Rohschnitt.
+- **Schneller Weg zum Ergebnis:** Gute Standardwerte und Golfstruktur vor komplexer Konfiguration.
 - **Vertrauen vor Wachstum:** Datenschutz, Stabilität und reproduzierbare Exporte haben Vorrang.
 
 ## Erfolgskriterium
 
-Ein Beta-Nutzer kann eigenes Material importieren, mindestens einen Schlag sauber schneiden, einen nachvollziehbaren Tracer oder ein Overlay setzen und einen abspielbaren Clip exportieren, ohne technische Hilfe zu benötigen.
+Ein Beta-Nutzer kann das Material einer Golfrunde importieren, nach Löchern, Spielern und Schlägen strukturieren, daraus ohne technische Hilfe einen zusammenhängenden Rohschnitt erzeugen, mindestens eine Golfgrafik ergänzen und ein abspielbares Gesamtvideo exportieren. Multicam und Shot-Tracer erhöhen den Wert innerhalb dieses Kernpfads, sind aber nicht das alleinige Produktversprechen.
