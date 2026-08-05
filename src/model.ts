@@ -217,6 +217,22 @@ export function upsertSequence(project: GolfProject, draft: SequenceDraft): Golf
     };
 }
 
+export function setSequenceActiveMedia(project: GolfProject, sequenceId: string, mediaId: string): GolfProject {
+    const sequence = project.sequences.find((item) => item.id === sequenceId);
+    if (!sequence || sequence.sourceType !== 'group' || sequence.activeMediaId === mediaId) return project;
+    const group = project.groups.find((item) => item.id === sequence.sourceId);
+    const angle = sequence.multicamAngles?.find((item) => item.mediaId === mediaId);
+    const media = project.media.find((item) => item.id === mediaId);
+    if (!group?.mediaIds.includes(mediaId) || !angle || media?.kind !== 'video') return project;
+    return {
+        ...project,
+        sequences: project.sequences.map((item) => item.id === sequenceId
+            ? { ...item, activeMediaId: mediaId, updatedAt: new Date().toISOString() }
+            : item),
+        modifiedAt: new Date().toISOString(),
+    };
+}
+
 export function removeSequence(project: GolfProject, sequenceId: string): GolfProject {
     return {
         ...project,

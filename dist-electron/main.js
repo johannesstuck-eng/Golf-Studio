@@ -11,6 +11,7 @@ import { assertMediaFilesAreReadable, IpcValidationError, isTrustedAppUrl, valid
 import { createMediaChooseHandler, createMediaEngineDiagnostics, MediaEngineError, publicMediaEngineStatus, resolveMediaEnginePaths, validateDiagnosticsForce } from './media-engine.js';
 import { exportMediaForSequence, exportRangeForSequence } from './multicam-export.js';
 import { alignAudioTracks, compactWaveform, pcm16Envelope } from './audio-sync.js';
+import { tracerFrameAtProgress } from './tracer-timing.js';
 const execFileAsync = promisify(execFile);
 const mediaExtensions = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mkv', '.wav', '.mp3', '.m4a', '.aac', '.flac']);
 const audioExtensions = new Set(['.wav', '.mp3', '.m4a', '.aac', '.flac']);
@@ -274,16 +275,6 @@ function catmullPoint(points, progress, smoothing) {
         x: (2 * t3 - 3 * t2 + 1) * start.x + (t3 - 2 * t2 + t) * tangentStart.x + (-2 * t3 + 3 * t2) * end.x + (t3 - t2) * tangentEnd.x,
         y: (2 * t3 - 3 * t2 + 1) * start.y + (t3 - 2 * t2 + t) * tangentStart.y + (-2 * t3 + 3 * t2) * end.y + (t3 - t2) * tangentEnd.y,
     };
-}
-
-function tracerFrameAtProgress(points, progress, fallbackStart, fallbackEnd) {
-    const ordered = [...points].sort((left, right) => left.frame - right.frame);
-    if (ordered.length < 2)
-        return fallbackStart + (fallbackEnd - fallbackStart) * progress;
-    const scaled = progress * (ordered.length - 1);
-    const index = Math.min(ordered.length - 2, Math.floor(scaled));
-    const segmentProgress = scaled - index;
-    return ordered[index].frame + (ordered[index + 1].frame - ordered[index].frame) * segmentProgress;
 }
 
 function cameraLockTargetPoint(lock, point) {

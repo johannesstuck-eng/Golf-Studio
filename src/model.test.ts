@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence } from './model';
+import { addBlock, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence } from './model';
 import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
@@ -142,6 +142,25 @@ describe('project model', () => {
             { mediaId: 'wide', inFrame: 30, outFrame: 300, sourceFps: 30 },
             { mediaId: 'close', inFrame: 0, outFrame: 480, sourceFps: 60 },
         ]);
+    });
+
+    it('switches the active multicam angle only when it belongs to the saved sequence', () => {
+        const project = createProject(settings);
+        const video = { name: 'clip.mp4', kind: 'video' as const, device: 'Camera', deviceKey: 'camera', recordedAt: '2026-08-05T10:00:00.000Z', durationSeconds: 20, width: 1920, height: 1080, fps: 30, codec: 'h264', audioCodec: 'aac', hasAudio: true, sizeBytes: 1000 };
+        const withSequence = { ...project, media: [
+            { ...video, id: 'wide', path: 'wide.mp4' },
+            { ...video, id: 'close', path: 'close.mp4' },
+            { ...video, id: 'unused', path: 'unused.mp4' },
+        ], groups: [{ id: 'group', name: 'Multicam', mediaIds: ['wide', 'close', 'unused'], createdAt: '', syncStatus: 'audio' as const }], sequences: [{
+            id: 'sequence', sourceType: 'group' as const, sourceId: 'group', inFrame: 60, outFrame: 300, sourceFps: 30,
+            activeMediaId: 'wide', multicamAngles: [
+                { mediaId: 'wide', inFrame: 60, outFrame: 300, sourceFps: 30 },
+                { mediaId: 'close', inFrame: 90, outFrame: 330, sourceFps: 30 },
+            ], targetBlockId: project.blocks[0].id, createdAt: '', updatedAt: '',
+        }] };
+
+        expect(setSequenceActiveMedia(withSequence, 'sequence', 'close').sequences[0].activeMediaId).toBe('close');
+        expect(setSequenceActiveMedia(withSequence, 'sequence', 'unused')).toBe(withSequence);
     });
 
     it('persists manual camera sync and reapplies it to existing multicam sequences', () => {

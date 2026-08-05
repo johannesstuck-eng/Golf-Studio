@@ -1,6 +1,6 @@
 {
   "name": "cut18-local",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "CUT18 – das lokale Schnitt-Playbook für vollständige Golfvideos",
   "main": "dist-electron/main.js",
@@ -11,7 +11,7 @@
     "start": "electron .",
     "build": "vite build",
     "build:landing": "vite build --config vite.landing.config.ts",
-    "test": "vitest run && node --test tools/orchestrator.node-test.mjs tools/lockfile-security.node-test.mjs dist-electron/ipc-validation.node-test.mjs dist-electron/media-engine.node-test.mjs dist-electron/multicam-export.node-test.mjs dist-electron/audio-sync.node-test.mjs",
+    "test": "vitest run && node --test tools/orchestrator.node-test.mjs tools/lockfile-security.node-test.mjs dist-electron/ipc-validation.node-test.mjs dist-electron/media-engine.node-test.mjs dist-electron/multicam-export.node-test.mjs dist-electron/audio-sync.node-test.mjs dist-electron/tracer-timing.node-test.mjs",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run build",
     "orchestrate": "node tools/orchestrator.mjs",

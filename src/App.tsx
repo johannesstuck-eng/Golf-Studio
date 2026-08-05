@@ -8,7 +8,7 @@ import {
 import {
     addBlock, blockLabel, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
     effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence,
-    multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource,
+    multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia,
     suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore,
     updateSequenceOverlay, updateShotTracer, upsertSequence,
 } from './model';
@@ -22,6 +22,7 @@ import {
     type MediaItem,
     type MediaEngineStatus,
     type MulticamAudioSyncResult,
+    type MulticamAngle,
     type MulticamGroup,
     type MulticamSyncProgress,
     type OverlayPosition,
@@ -42,6 +43,7 @@ import { createTracerFlight, insertTracerIntermediate } from './tracerWorkflow';
 import { lockTracerPointsToWorld, screenToWorld, svgCameraMatrix, worldToScreen } from './cameraLock';
 import { Dashboard } from './AgentDashboard';
 import { firstSequenceForHole, summarizeRoundDesk, type HoleStoryStatus } from './roundDesk';
+import { sequencePlaybackSource } from './roughCut';
 
 const makeId = () => crypto.randomUUID();
 type StudioScreen = 'round' | 'import' | 'review' | 'build' | 'export';
@@ -620,7 +622,7 @@ function shotTracerPath(points: ShotTracerPoint[], smoothing: number): string {
     return path;
 }
 
-function ShotTracerLayer({ tracer, frame, editing, marking, tracking, candidates, cameraMarkers, videoRef, sequence, onMark, onPoint, onCandidate, onCursor }: {
+function ShotTracerLayer({ tracer, frame, editing, marking, tracking, candidates, cameraMarkers, videoRef, sequence, mediaRange, onMark, onPoint, onCandidate, onCursor }: {
     tracer?: ShotTracerEffect;
     frame: number;
     editing: boolean;
@@ -630,6 +632,7 @@ function ShotTracerLayer({ tracer, frame, editing, marking, tracking, candidates
     cameraMarkers: { x: number; y: number; label: string }[];
     videoRef: React.RefObject<HTMLVideoElement | null>;
     sequence: VirtualSequence;
+    mediaRange?: MulticamAngle;
     onMark: (x: number, y: number) => void;
     onPoint: (index: number, x: number, y: number) => void;
     onCandidate: (candidate: BallCandidate) => void;
@@ -648,8 +651,8 @@ function ShotTracerLayer({ tracer, frame, editing, marking, tracking, candidates
         let animationFrameHandle: number | undefined;
         let stopped = false;
         const paint = (mediaTime: number) => {
-            const sourceFrame = mediaTime * sequence.sourceFps;
-            const relativeFrame = Math.max(0, sourceFrame - sequence.inFrame);
+            const mediaStart = mediaRange ? mediaRange.inFrame / mediaRange.sourceFps : sequence.inFrame / sequence.sourceFps;
+            const relativeFrame = Math.max(0, (mediaTime - mediaStart) * sequence.sourceFps);
             const visual = tracerVisualState(tracer, relativeFrame);
             motionGroupRef.current?.setAttribute('transform', svgCameraMatrix(tracer.cameraLock, relativeFrame) ?? '');
             const tail = (tracer.tailLength ?? .16) * 100;
@@ -688,7 +691,7 @@ function ShotTracerLayer({ tracer, frame, editing, marking, tracking, candidates
             if (videoFrameHandle !== undefined) video.cancelVideoFrameCallback?.(videoFrameHandle);
             if (animationFrameHandle !== undefined) cancelAnimationFrame(animationFrameHandle);
         };
-    }, [tracer, sequence, videoRef]);
+    }, [mediaRange, tracer, sequence, videoRef]);
     if (!tracer) return <svg className="shot-tracer-layer" aria-hidden="true" />;
     const visual = tracerVisualState(tracer, frame);
     const path = shotTracerPath(tracer.points, tracer.smoothing);
@@ -904,11 +907,8 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         const block = project.blocks.find((item) => item.id === sequence.targetBlockId);
         if (!block) return [];
         const player = project.settings.players.find((item) => item.id === block.playerId);
-        const media = sequence.sourceType === 'media'
-            ? project.media.find((item) => item.id === sequence.sourceId)
-            : project.media.find((item) => project.groups.find((group) => group.id === sequence.sourceId)?.mediaIds.includes(item.id) && item.kind === 'video')
-                ?? project.media.find((item) => project.groups.find((group) => group.id === sequence.sourceId)?.mediaIds.includes(item.id));
-        return media ? [{ sequence, block, player, media }] : [];
+        const playback = sequencePlaybackSource(project, sequence);
+        return playback ? [{ sequence, block, player, ...playback }] : [];
     }), [project, sequenceIds]);
     const [index, setIndex] = useState(0);
     const [playing, setPlaying] = useState(true);
@@ -952,7 +952,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         const duration = (current.sequence.outFrame - current.sequence.inFrame) / current.sequence.sourceFps;
         const audioFade = Math.min(duration / 2, EDITORIAL_STYLE.audioFadeFrames / current.sequence.sourceFps);
         const paint = (sourceTime: number) => {
-            const relative = Math.max(0, sourceTime - current.sequence.inFrame / current.sequence.sourceFps);
+            const relative = Math.max(0, sourceTime - current.range.inFrame / current.range.sourceFps);
             const remaining = Math.max(0, duration - relative);
             const fadeIn = transitionIn?.kind === 'hole-change' ? Math.max(0, 1 - relative / Math.max(.001, transitionIn.dipSeconds)) : 0;
             const fadeOut = transitionOut?.kind === 'hole-change' ? Math.max(0, 1 - remaining / Math.max(.001, transitionOut.dipSeconds)) : 0;
@@ -985,12 +985,12 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
             if (videoFrameHandle !== undefined) videoRef.current?.cancelVideoFrameCallback?.(videoFrameHandle);
             if (animationHandle !== undefined) cancelAnimationFrame(animationHandle);
         };
-    }, [current?.sequence.id, transitionIn?.kind, transitionOut?.kind, holeTitleIndex]);
+    }, [current?.sequence.id, current?.media.id, transitionIn?.kind, transitionOut?.kind, holeTitleIndex]);
     const startCurrent = () => {
         if (!current) return;
         const element = mediaElement();
         if (!element) return;
-        element.currentTime = current.sequence.inFrame / current.sequence.sourceFps + pendingOffset.current;
+        element.currentTime = current.range.inFrame / current.range.sourceFps + pendingOffset.current;
         pendingOffset.current = 0;
         if (playing) void element.play().catch(() => setPlaying(false));
     };
@@ -1029,7 +1029,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
             if (remaining <= durations[itemIndex] || itemIndex === durations.length - 1) {
                 if (itemIndex === index) {
                     const item = items[itemIndex];
-                    if (item && mediaElement()) mediaElement()!.currentTime = item.sequence.inFrame / item.sequence.sourceFps + remaining;
+                    if (item && mediaElement()) mediaElement()!.currentTime = item.range.inFrame / item.range.sourceFps + remaining;
                     setLocalFrame(Math.round(remaining * (item?.sequence.sourceFps ?? 1)));
                 } else goTo(itemIndex, remaining);
                 return;
@@ -1042,7 +1042,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         const duration = current.sequence.outFrame - current.sequence.inFrame;
         const target = Math.min(duration - 1, Math.max(0, Math.round(frame)));
         const element = mediaElement();
-        if (element) element.currentTime = (current.sequence.inFrame + target) / current.sequence.sourceFps;
+        if (element) element.currentTime = current.range.inFrame / current.range.sourceFps + target / current.sequence.sourceFps;
         setLocalFrame(target);
         setPlaying(false);
         element?.pause();
@@ -1063,7 +1063,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         setBallCandidates([]);
         setDetectionStatus(trackingPoints?.length ? 'Kleiner Bereich um den letzten Punkt wird lokal analysiert …' : 'Mehrere Frames werden lokal verglichen …');
         try {
-            await seekVideoForAnalysis(videoRef.current, (current.sequence.inFrame + targetFrame) / current.sequence.sourceFps);
+            await seekVideoForAnalysis(videoRef.current, current.range.inFrame / current.range.sourceFps + targetFrame / current.sequence.sourceFps);
             setLocalFrame(targetFrame);
             const stage = videoRef.current.closest('.preview-stage') as HTMLElement | null;
             const focus = stage && trackingPoints?.length ? { ...stagePointToVideo(trackingPoints.at(-1)!, videoRef.current, stage), radius: trackingPoints.length > 1 ? .28 : .22 } : undefined;
@@ -1191,7 +1191,9 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         if (!current || !currentTracer) return;
         const impact = currentTracer.points.find((point) => point.kind === 'impact')?.frame ?? currentTracer.impactFrame ?? 0;
         if (localFrame <= impact) { setDetectionStatus('Der Landeframe muss nach dem Impact liegen.'); return; }
-        setProject(updateShotTracer(project, current.sequence.id, { endFrame: localFrame, disappearFrame: localFrame }));
+        const duration = current.sequence.outFrame - current.sequence.inFrame;
+        const disappearFrame = Math.min(duration, localFrame + Math.round(current.sequence.sourceFps * 1.25));
+        setProject(updateShotTracer(project, current.sequence.id, { endFrame: localFrame, disappearFrame }));
         setTracerWorkflowStep('landing-point');
         setMarkingBall(true);
         setDetectionStatus(`Landeframe ${localFrame} gespeichert. Landepunkt im Bild anklicken.`);
@@ -1228,7 +1230,9 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
             const impactPoint = currentTracer.points.find((point) => point.kind === 'impact') ?? currentTracer.points[0];
             if (!impactPoint || localFrame <= impactPoint.frame) return setDetectionStatus('Ungültiger Landeframe.');
             const points = createTracerFlight(impactPoint, localFrame, x, y);
-            setProject(updateShotTracer(project, current.sequence.id, { points, impactFrame: impactPoint.frame, endFrame: localFrame, disappearFrame: localFrame, occlusionStartFrame: null, occlusionEndFrame: null }));
+            const duration = current.sequence.outFrame - current.sequence.inFrame;
+            const disappearFrame = Math.min(duration, localFrame + Math.round(current.sequence.sourceFps * 1.25));
+            setProject(updateShotTracer(project, current.sequence.id, { points, impactFrame: impactPoint.frame, endFrame: localFrame, disappearFrame, occlusionStartFrame: null, occlusionEndFrame: null }));
             setTracerWorkflowStep('edit');
             setMarkingBall(false);
             setTrackingCursor(undefined);
@@ -1249,7 +1253,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         setMarkingBall(false);
         setTrackingCursor(undefined);
         setBallCandidates([]);
-        setDetectionStatus('Tracer gespeichert. Landeframe bestimmt jetzt exakt das Ende.');
+        setDetectionStatus('Tracer gespeichert. Die Flugbahn folgt den echten Timing-Punkten und blendet nach der Landung weich aus.');
     };
     const startCameraLock = () => {
         if (!current || !currentTracer) return;
@@ -1342,6 +1346,12 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         window.addEventListener('keydown', keydown, true);
         return () => window.removeEventListener('keydown', keydown, true);
     }, [tracerEditing, manualTracking, landingMode, landingOcclusion, localFrame, ballCandidates, currentTracer, project]);
+    const switchCamera = (mediaId: string) => {
+        if (!current || current.sequence.sourceType !== 'group' || current.media.id === mediaId) return;
+        pendingOffset.current = localFrame / current.sequence.sourceFps;
+        mediaElement()?.pause();
+        setProject(setSequenceActiveMedia(project, current.sequence.id, mediaId));
+    };
     if (!current) return <div className="preview-backdrop"><section className="rough-preview empty"><button className="preview-close" onClick={onClose}><X size={18} /></button><MonitorPlay size={44} /><h2>Noch kein Rohschnitt vorhanden</h2><p>Weise zuerst mindestens eine Sequenz einem Golfblock zu.</p></section></div>;
     const holeData = project.courseData.holes.find((hole) => hole.number === current.block.hole);
     const scoreText = current.player ? scoreBeforeHole(project, current.player.id, current.block.hole) : 'E';
@@ -1352,17 +1362,17 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
     return <div className="preview-backdrop"><section className="rough-preview">
         <header className="preview-header"><div><div className="eyebrow"><span /> ROHSCHNITT-VORSCHAU</div><h2>{onlyHole ? `Loch ${onlyHole}` : 'Komplette Runde'}</h2></div><div className="preview-now"><span>JETZT</span><b>Loch {current.block.hole} · {current.player?.name} · {current.block.label}</b></div><button className="preview-close" onClick={onClose}><X size={18} /></button></header>
         <div className="preview-body"><div className="preview-player"><div className="preview-stage">
-            {current.media.kind === 'video' ? <video key={current.sequence.id} ref={videoRef} src={fileUrl(current.media.path)} onLoadedMetadata={startCurrent} onTimeUpdate={(event) => {
-                const sourceFrame = Math.round(event.currentTarget.currentTime * current.sequence.sourceFps);
-                const relative = Math.max(0, sourceFrame - current.sequence.inFrame);
+            {current.media.kind === 'video' ? <video key={`${current.sequence.id}:${current.media.id}`} ref={videoRef} src={fileUrl(current.media.path)} onLoadedMetadata={startCurrent} onTimeUpdate={(event) => {
+                const relativeSeconds = Math.max(0, event.currentTarget.currentTime - current.range.inFrame / current.range.sourceFps);
+                const relative = Math.round(relativeSeconds * current.sequence.sourceFps);
                 setLocalFrame(relative);
-                if (sourceFrame >= current.sequence.outFrame) advance();
+                if (event.currentTarget.currentTime >= current.range.outFrame / current.range.sourceFps) advance();
             }} onEnded={advance} /> : <div className="preview-audio"><FileAudio size={64} /><b>{current.media.name}</b><audio key={current.sequence.id} ref={audioRef} src={fileUrl(current.media.path)} onLoadedMetadata={startCurrent} onTimeUpdate={(event) => {
-                const sourceFrame = Math.round(event.currentTarget.currentTime * current.sequence.sourceFps);
-                setLocalFrame(Math.max(0, sourceFrame - current.sequence.inFrame));
-                if (sourceFrame >= current.sequence.outFrame) advance();
+                const relativeSeconds = Math.max(0, event.currentTarget.currentTime - current.range.inFrame / current.range.sourceFps);
+                setLocalFrame(Math.round(relativeSeconds * current.sequence.sourceFps));
+                if (event.currentTarget.currentTime >= current.range.outFrame / current.range.sourceFps) advance();
             }} onEnded={advance} /></div>}
-            <ShotTracerLayer tracer={activeTracer} frame={localFrame} editing={tracerEditing} marking={markingBall} tracking={Boolean(tracerWorkflowStep || cameraLockStep)} candidates={[]} cameraMarkers={cameraMarkers} videoRef={videoRef} sequence={current.sequence} onMark={(x, y) => cameraLockStep ? handleCameraLockPoint(x, y) : handleTracerWorkflowPoint(x, y)} onCandidate={() => undefined} onCursor={setTrackingCursor} onPoint={(pointIndex, x, y) => {
+            <ShotTracerLayer tracer={activeTracer} frame={localFrame} editing={tracerEditing} marking={markingBall} tracking={Boolean(tracerWorkflowStep || cameraLockStep)} candidates={[]} cameraMarkers={cameraMarkers} videoRef={videoRef} sequence={current.sequence} mediaRange={current.range} onMark={(x, y) => cameraLockStep ? handleCameraLockPoint(x, y) : handleTracerWorkflowPoint(x, y)} onCandidate={() => undefined} onCursor={setTrackingCursor} onPoint={(pointIndex, x, y) => {
                 if (!current || !activeTracer) return;
                 const worldPoint = screenToWorld(activeTracer.cameraLock, localFrame, { x, y });
                 setProject(updateShotTracer(project, current.sequence.id, { points: activeTracer.points.map((point, index) => index === pointIndex ? { ...point, ...worldPoint } : point) }));
@@ -1372,7 +1382,12 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
             <div ref={editorialFadeRef} className={`editorial-transition ${holeTitleItem ? 'show-card' : ''}`}><div className="hole-title-card"><span>{project.settings.course.toUpperCase()}</span><b>HOLE {holeTitleItem?.block.hole}</b><em>PAR {titleHoleData?.par ?? '–'}{titleHoleData?.lengthMeters ? ` · ${titleHoleData.lengthMeters} M` : ''}</em></div></div>
         </div><div className="preview-transport"><button onClick={() => goTo(index - 1)} disabled={index === 0}><SkipBack size={18} /></button><button className="preview-play" onClick={togglePlay}>{playing ? <Pause size={19} /> : <Play size={19} />}</button><button onClick={() => goTo(index + 1)} disabled={index === items.length - 1}><SkipForward size={18} /></button><strong>{formatDuration(position)} / {formatDuration(totalDuration)}</strong><span>Sequenz {index + 1} von {items.length}</span></div>
         <input className="rough-progress" type="range" min={0} max={Math.max(1, Math.round(totalDuration * 1000))} value={Math.round(position * 1000)} onChange={(event) => seekGlobal(Number(event.target.value) / 1000)} /></div>
-        <aside className="preview-inspector"><div className="inspector-section"><span className="field-label">Aktuelle Sequenz</span><h3>{current.media.name}</h3><p>{frameTime(current.sequence.inFrame, current.sequence.sourceFps)} – {frameTime(current.sequence.outFrame, current.sequence.sourceFps)}</p><button className="secondary edit-current" onClick={() => onEdit(current.sequence.id)}><Scissors size={14} /> Im Sichtungseditor öffnen</button></div>
+        <aside className="preview-inspector"><div className="inspector-section"><span className="field-label">Aktuelle Sequenz</span><h3>{current.media.name}</h3><p>{frameTime(current.range.inFrame, current.range.sourceFps)} – {frameTime(current.range.outFrame, current.range.sourceFps)}</p><button className="secondary edit-current" onClick={() => onEdit(current.sequence.id)}><Scissors size={14} /> Im Sichtungseditor öffnen</button></div>
+            {(current.sequence.multicamAngles?.length ?? 0) > 1 && <div className="inspector-section preview-angle-deck"><span className="field-label">Kameraperspektive</span><p>Wechselt denselben synchronisierten Schlag ohne neues Zuschneiden.</p><div>{current.sequence.multicamAngles!.map((angle, angleIndex) => {
+                const media = project.media.find((item) => item.id === angle.mediaId);
+                if (!media) return null;
+                return <button className={media.id === current.media.id ? 'active' : ''} onClick={() => switchCamera(media.id)} key={media.id}><span>{angleIndex + 1}</span><div><b>{media.device || `Kamera ${angleIndex + 1}`}</b><small>{media.name}</small></div>{media.id === current.media.id && <Check size={14} />}</button>;
+            })}</div></div>}
             <div className="inspector-section fixed-style-summary"><span className="field-label">Fester Editorial-Look</span><div><ShieldCheck size={17} /><span><b>Automatisch aktiv</b><small>Scorebug · Schlaginfo · Lochtrenner · Audio-Microfade</small></span></div><p>Innerhalb eines Lochs bleiben die Schnitte direkt. Beim Lochwechsel folgen Dip-to-Black und Lochkarte.</p></div>
             <ShotTracerControls project={project} sequence={current.sequence} tracer={currentTracer} frame={localFrame} editing={tracerEditing} workflowStep={tracerWorkflowStep} cameraLockStep={cameraLockStep} detectionStatus={detectionStatus} setProject={setProject} onEdit={(value) => { setTracerEditing(value); if (!value) { setTracerWorkflowStep(undefined); setCameraLockStep(undefined); setTrackingCursor(undefined); } setMarkingBall(false); setBallCandidates([]); if (value) { setPlaying(false); mediaElement()?.pause(); } }} onStart={startTracerWorkflow} onConfirmImpactFrame={confirmImpactFrame} onConfirmLandingFrame={confirmLandingFrame} onBeginIntermediate={beginIntermediatePoint} onConfirmIntermediateFrame={confirmIntermediateFrame} onFinish={finishTracerWorkflow} onStartCameraLock={startCameraLock} onClearCameraLock={clearCameraLock} onSeekFrame={seekLocalFrame} />
         </aside></div>
@@ -1468,7 +1483,7 @@ function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfPr
     const totalDuration = project.sequences.reduce((sum, sequence) => sum + (sequence.outFrame - sequence.inFrame) / sequence.sourceFps, 0);
     const sourceName = (sequence: VirtualSequence) => sequence.sourceType === 'media'
         ? project.media.find((media) => media.id === sequence.sourceId)?.name ?? 'Fehlender Clip'
-        : `${project.groups.find((group) => group.id === sequence.sourceId)?.name ?? 'Fehlende Multicam-Gruppe'}${sequence.multicamAngles?.length ? ` · ${sequence.multicamAngles.length} Kameras` : ''}`;
+        : `${project.media.find((media) => media.id === sequence.activeMediaId)?.name ?? project.groups.find((group) => group.id === sequence.sourceId)?.name ?? 'Fehlende Multicam-Gruppe'}${sequence.multicamAngles?.length ? ` · ${sequence.multicamAngles.length} Kameras` : ''}`;
     const removeBlock = (blockId: string, sequenceCount: number) => {
         if (sequenceCount && !window.confirm(`Dieser Block enthält ${sequenceCount} Sequenz${sequenceCount === 1 ? '' : 'en'}. Block und Sequenzen wirklich löschen?`)) return;
         setProject(deleteBlock(project, blockId));
