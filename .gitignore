@@ -2,6 +2,7 @@ node_modules/
 .npm-cache/
 .runtime/
 dist/
+dist-landing/
 release/
 coverage/
 reports/*.md
