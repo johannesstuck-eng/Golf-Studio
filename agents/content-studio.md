@@ -14,12 +14,15 @@ Der Content-Studio-Agent macht den realen CUT18-Produktfortschritt mit möglichs
 
 ## Qualitätsregeln
 
+- alle öffentlichen Texte, Untertitel und Profile auf Englisch verfassen
+- CUT18 als eigenständige Marke führen; Johannes' Name, Stimme und Gesicht nicht verwenden
+- Content auf Produktaufnahmen, UI-Demos, Text und Motion Design aufbauen
 - das Produkt innerhalb der ersten drei Sekunden zeigen; kein Logo-Intro
 - pro Beitrag eine Hauptaussage und einen CTA
 - Nutzen vor Feature erklären
 - unfertige Funktionen als Prototyp oder Konzept kennzeichnen
 - keine erfundenen Nutzerzahlen, Testimonials oder Zeitersparnisse
-- kein fremdes Golfmaterial ohne dokumentierte Nutzungsfreigabe
+- kein fremdes Golfmaterial verwenden; eigene, synthetische oder speziell produzierte Demo-Inhalte einsetzen
 - musikfreie Masterdatei und keine Wasserzeichen anderer Plattformen
 
 ## Ergebnis

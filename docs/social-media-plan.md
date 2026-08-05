@@ -37,9 +37,13 @@ X, Threads, Pinterest, Discord und eine redaktionell gepflegte Facebook-Seite we
 
 Domain, Handles und Accounts sind noch nicht registriert. Vor der Registrierung werden Verfügbarkeit und Markenlage erneut geprüft. Accounts sollen später über eine zentrale Owner-Adresse, Passwortmanager, Zwei-Faktor-Authentifizierung und gesicherte Recovery-Codes verwaltet werden; Zugangsdaten gehören nicht ins Repository und nicht an Agenten.
 
-## Sprachannahme zur Freigabe
+## Freigegebene Kommunikationsform
 
-Empfehlung: englische Produkt- und Social-Kommunikation für den globalen Creator-Markt, aber erste persönliche Tests mit gut erreichbaren deutschsprachigen Creatorn. Es werden keine getrennten deutschen und englischen Accounts aufgebaut. Screen-Demos können mit englischen Untertiteln arbeiten; ob Johannes selbst englisch, deutsch oder gar nicht vor der Kamera auftritt, bleibt eine ausdrückliche Freigabe.
+- Produkt-, Profil- und Social-Kommunikation erfolgt auf Englisch.
+- Es werden keine getrennten deutschen und englischen Accounts aufgebaut.
+- CUT18 tritt als eigenständige Marke auf; Johannes' Name, Stimme und Gesicht werden nicht öffentlich verwendet.
+- Content besteht aus Produktaufnahmen, UI-Demos, Text, Motion Design und bei Bedarf neutralem Voice-over, das Johannes nicht identifiziert.
+- Für öffentliche Demos wird kein fremdes Golfmaterial benötigt. Verwendet werden eigene, synthetische oder ausdrücklich für CUT18 produzierte Demo-Inhalte ohne identifizierbare Dritte.
 
 ## Content-System
 
@@ -80,7 +84,7 @@ Zielaufwand für Johannes: ungefähr 30 Minuten pro Woche plus eine gebündelte 
 
 1. Der Growth-Agent wählt aus Produktstatus und realem Build ein Wochenthema und eine Hypothese.
 2. Der Content-Agent erstellt drei Hooks, ein Skript, eine kurze Aufnahmeliste, Captions und die benötigten Zuschnitte.
-3. Johannes liefert einmalig 8 bis 12 Minuten Bildschirmaufnahme, optional Voice-over oder 30 Sekunden Handyvideo, und bestätigt die Nutzungsrechte des Materials.
+3. Johannes liefert bei Bedarf einmalig 8 bis 12 Minuten Bildschirmaufnahme. Persönliches Voice-over, Handyvideo oder ein öffentlicher Auftritt sind nicht vorgesehen.
 4. Aus diesem Ausgangsmaterial werden ein 45- bis 75-sekündiger Hero-Clip, zwei kurze Cutdowns, ein Carousel und bei Bedarf ein Longform-Abschnitt geplant.
 5. Der Plattform-Agent passt Titel, Einstieg und CTA an YouTube, Instagram und TikTok an. Es wird keine Version mit fremdem Plattform-Wasserzeichen übernommen.
 6. Johannes erhält ein einziges Freigabepaket. Erst nach Freigabe darf später veröffentlicht werden.
@@ -178,8 +182,8 @@ Agenten dürfen niemals Zugangsdaten speichern oder teilen, Einwilligungen erfin
 - [YouTube: Shorts-Views und Engaged Views](https://support.google.com/youtube/answer/10059070/get-started-with-youtube-shorts?hl=en-GB)
 - [YouTube: klickbare und nicht klickbare Links](https://support.google.com/youtube/answer/13748639)
 
-## Offene Entscheidungen für Johannes
+## Freigegebene Entscheidungen
 
-1. Kommunikation primär auf Englisch, Deutsch oder zweisprachig?
-2. Soll Johannes mit Name, Stimme oder Gesicht öffentlich mit CUT18 verbunden sein?
-3. Darf freigegebenes fremdes Golfmaterial in öffentlichen Vorher/Nachher-Demos verwendet werden?
+1. Kommunikation: Englisch.
+2. Öffentliche Rolle von Johannes: kein Name, keine Stimme, kein Gesicht.
+3. Demo-Material: kein fremdes Golfmaterial erforderlich.

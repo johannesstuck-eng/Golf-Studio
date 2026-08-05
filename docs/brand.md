@@ -26,6 +26,13 @@ Domain, Social-Accounts und E-Mail-Adressen sind noch nicht registriert oder akt
 - der Name steht allein; „Golf Video Studio“ darf nur als beschreibender Zusatz verwendet werden
 - Social-Ausgaben verwenden `@cut18golf`, wenn der Handle bei der tatsächlichen Registrierung bestätigt wird
 
+## Öffentliche Kommunikation
+
+- Produktsprache und Social-Kommunikation sind Englisch.
+- CUT18 tritt als eigenständige Marke ohne öffentlichen Personenbezug zu Johannes auf.
+- Johannes' Name, Stimme und Gesicht werden nicht in Profilen, Posts oder Produktvideos verwendet.
+- Öffentliche Demos verwenden kein fremdes Golfmaterial; bevorzugt werden UI-Aufnahmen sowie eigene oder synthetische Demo-Inhalte.
+
 ## Visuelle Leitidee
 
 - tiefes Schwarz und dunkles Grün als filmische Basis
