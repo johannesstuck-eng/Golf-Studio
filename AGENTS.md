@@ -1,10 +1,10 @@
-# Golf Studio – Agent Instructions
+# CUT18 – Agent Instructions
 
 Diese Regeln gelten im gesamten Repository. Spezifischere `AGENTS.md`-Dateien dürfen sie ergänzen, aber nicht die Sicherheits- und Freigaberegeln abschwächen.
 
 ## Auftrag
 
-Entwickle Golf Studio schrittweise zu einem verlässlichen, verkaufbaren Windows-Produkt. Optimiere zuerst den engsten validierten Nutzerpfad; neue Funktionsbreite ist nachrangig.
+Entwickle CUT18 schrittweise zu einem verlässlichen, verkaufbaren Windows-Produkt. Optimiere zuerst den engsten validierten Nutzerpfad; neue Funktionsbreite ist nachrangig.
 
 ## Verbindlicher Workflow
 

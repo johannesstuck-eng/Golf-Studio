@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, setScorecardSource, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence } from './model';
-import type { ProjectSettings } from './types';
+import { addBlock, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence } from './model';
+import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
     id: 'round',
@@ -15,7 +15,7 @@ describe('project model', () => {
     it('upgrades old projects without losing media', () => {
         const old = { schemaVersion: 1, settings, media: [{ id: 'media-1' }], suggestions: [], groups: [] };
         const project = normalizeProject(old);
-        expect(project.schemaVersion).toBe(6);
+        expect(project.schemaVersion).toBe(8);
         expect(project.media).toHaveLength(1);
         expect(project.blocks).toHaveLength(36);
         expect(project.sequences).toEqual([]);
@@ -94,6 +94,79 @@ describe('project model', () => {
         expect(automaticPlayerOrder(project, 1, 0)).toEqual(['joe', 'ferdi']);
     });
 
+    it('suggests multicam groups for parallel DJI filename families from the same reported device', () => {
+        const base = {
+            kind: 'video' as const,
+            path: 'C:\\Clips\\round',
+            device: 'DJI Osmo Pocket',
+            deviceKey: 'dji-osmo-pocket:round',
+            width: 3840,
+            height: 2160,
+            fps: 59.94,
+            codec: 'h264',
+            audioCodec: 'aac',
+            hasAudio: true,
+            sizeBytes: 1000,
+        };
+        const media: MediaItem[] = [
+            { ...base, id: 'classic-853', name: 'DJI_0853.MP4', recordedAt: '2026-08-05T09:03:21.000Z', durationSeconds: 180 },
+            { ...base, id: 'timestamp-47', name: 'DJI_20260805110321_0047_D.MP4', recordedAt: '2026-08-05T09:03:21.000Z', durationSeconds: 182 },
+            { ...base, id: 'timestamp-48', name: 'DJI_20260805110816_0048_D.MP4', recordedAt: '2026-08-05T09:08:17.000Z', durationSeconds: 591 },
+            { ...base, id: 'classic-854-1', name: 'DJI_0854_001.MP4', recordedAt: '2026-08-05T09:08:19.000Z', durationSeconds: 327 },
+            { ...base, id: 'classic-854-2', name: 'DJI_0854_002.MP4', recordedAt: '2026-08-05T09:13:47.000Z', durationSeconds: 247 },
+        ];
+
+        const suggestions = suggestMulticam(media);
+
+        expect(suggestions).toHaveLength(2);
+        expect(suggestions[0].mediaIds).toEqual(['classic-853', 'timestamp-47']);
+        expect(suggestions[1].mediaIds).toEqual(['timestamp-48', 'classic-854-1', 'classic-854-2']);
+        expect(suggestions.every((suggestion) => suggestion.confidence === 'high')).toBe(true);
+    });
+
+    it('transfers every overlapping camera angle on the shared multicam timeline', () => {
+        const project = createProject(settings);
+        const mediaBase = { name: 'clip.mp4', kind: 'video' as const, device: 'Camera', deviceKey: 'camera', width: 1920, height: 1080, codec: 'h264', audioCodec: 'aac', hasAudio: true, sizeBytes: 1000 };
+        const withGroup = { ...project, media: [
+            { ...mediaBase, id: 'wide', path: 'wide.mp4', recordedAt: '2026-08-05T10:00:00.000Z', durationSeconds: 20, fps: 30 },
+            { ...mediaBase, id: 'close', path: 'close.mp4', recordedAt: '2026-08-05T10:00:02.000Z', durationSeconds: 20, fps: 60 },
+            { ...mediaBase, id: 'late', path: 'late.mp4', recordedAt: '2026-08-05T10:00:30.000Z', durationSeconds: 5, fps: 30 },
+        ], groups: [{ id: 'group', name: 'Multicam 1', mediaIds: ['wide', 'close', 'late'], createdAt: '', syncStatus: 'timestamp-only' as const }] };
+
+        expect(multicamTimeline(withGroup, 'group')).toMatchObject({
+            startMs: Date.parse('2026-08-05T10:00:00.000Z'),
+            endMs: Date.parse('2026-08-05T10:00:35.000Z'),
+            fps: 60,
+        });
+        expect(multicamAnglesForRange(withGroup, 'group', 60, 600, 60)).toEqual([
+            { mediaId: 'wide', inFrame: 30, outFrame: 300, sourceFps: 30 },
+            { mediaId: 'close', inFrame: 0, outFrame: 480, sourceFps: 60 },
+        ]);
+    });
+
+    it('persists manual camera sync and reapplies it to existing multicam sequences', () => {
+        const project = createProject(settings);
+        const mediaBase = { name: 'clip.mp4', kind: 'video' as const, device: 'Camera', deviceKey: 'camera', recordedAt: '2026-08-05T10:00:00.000Z', durationSeconds: 20, width: 1920, height: 1080, fps: 30, codec: 'h264', audioCodec: 'aac', hasAudio: true, sizeBytes: 1000 };
+        const groupProject = { ...project, media: [
+            { ...mediaBase, id: 'reference', path: 'reference.mp4' },
+            { ...mediaBase, id: 'late-content', path: 'late.mp4' },
+        ], groups: [{ id: 'group', name: 'Multicam', mediaIds: ['reference', 'late-content'], createdAt: '', syncStatus: 'timestamp-only' as const }], sequences: [{
+            id: 'sequence', sourceType: 'group' as const, sourceId: 'group', inFrame: 60, outFrame: 300, sourceFps: 30,
+            activeMediaId: 'reference', targetBlockId: project.blocks[0].id, createdAt: '', updatedAt: '',
+        }] };
+
+        const synced = setMulticamSyncOffset(groupProject, 'group', 'late-content', 1.5);
+
+        expect(synced.schemaVersion).toBe(8);
+        expect(synced.groups[0]).toMatchObject({ syncStatus: 'manual', syncOffsetsSeconds: { 'late-content': 1.5 } });
+        expect(synced.sequences[0].multicamAngles).toEqual([
+            { mediaId: 'reference', inFrame: 60, outFrame: 300, sourceFps: 30 },
+            { mediaId: 'late-content', inFrame: 105, outFrame: 345, sourceFps: 30 },
+        ]);
+        const automatic = setMulticamSyncOffsets(groupProject, 'group', { reference: 0, 'late-content': 1.5 }, 'audio');
+        expect(automatic.groups[0]).toMatchObject({ syncStatus: 'audio', syncOffsetsSeconds: { reference: 0, 'late-content': 1.5 } });
+    });
+
     it('stores course, scorecard, score and shot metadata', () => {
         let project = createProject(settings);
         const block = project.blocks.find((item) => item.hole === 1 && item.playerId === 'joe')!;
@@ -143,7 +216,7 @@ describe('project model', () => {
     it('upgrades legacy tracer tracks with render defaults', () => {
         const project = createProject(settings);
         const migrated = normalizeProject({ ...project, schemaVersion: 5, shotTracers: [{ id: 'legacy', sequenceId: 'sequence', enabled: true, impactFrame: 0, endFrame: 30, disappearFrame: 40, points: [{ frame: 0, x: 2, y: -.5 }] }] });
-        expect(migrated.schemaVersion).toBe(6);
+        expect(migrated.schemaVersion).toBe(8);
         expect(migrated.shotTracers[0]).toMatchObject({ color: '#c8ff42', thickness: 5, glow: 12, smoothing: .72, tailLength: .16, occlusionStartFrame: null, occlusionEndFrame: null, cameraLock: null });
         expect(migrated.shotTracers[0].points[0]).toMatchObject({ x: 1, y: 0 });
     });

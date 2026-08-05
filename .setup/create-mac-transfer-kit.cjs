@@ -4,8 +4,8 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const outputDirectory = path.join(root, 'transfer');
-const outputPath = path.join(outputDirectory, 'Golf-Round-Studio-Mac-Apple-Silicon-Buildpaket.zip');
-const prefix = 'Golf Round Studio Mac Buildpaket';
+const outputPath = path.join(outputDirectory, 'CUT18-Mac-Apple-Silicon-Buildpaket.zip');
+const prefix = 'CUT18 Mac Buildpaket';
 
 fs.mkdirSync(outputDirectory, { recursive: true });
 const output = fs.createWriteStream(outputPath);
