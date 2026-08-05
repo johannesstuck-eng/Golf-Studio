@@ -100,7 +100,19 @@ Wenn dieses System nicht in einem Produktionsblock funktioniert, wird zuerst Lin
 | 3: Produktbeweis | DJI-Multicam-Zuordnung | Import zu Spieler und Timeline | ehrliches Vorher/Nachher mit Prototyp-Hinweis | Erkenntnisse aus dem Multicam-Fix |
 | 4: Community | Welche Automatik spart am meisten Zeit? | „Fix This Round“ mit zwei Varianten | Monatsfortschritt und Beta-CTA | Longform: aktueller End-to-End-Workflow |
 
-Die erste Produktion nutzt den vorhandenen Multicam-Fix: fünf DJI-Dateien, automatische Zuordnung, Nutzen für den vollständigen Rundenschnitt und der Abschluss „CUT18 baut das Playbook für die ganze Runde — nicht nur für einzelne Clips.“
+## Erstes Launch-Content-Paket
+
+Das erste öffentliche Paket zeigt nicht einen einzelnen Bugfix oder ein technisches Update. Es demonstriert das vollständige Produktversprechen:
+
+1. unsortiertes Material einer ganzen Golfrunde
+2. Struktur nach Löchern, Spielern und Schlägen
+3. zusammenhängender Rohschnitt über die Runde
+4. Multicam, Score- und Loch-Overlays sowie Shot-Tracer als Veredelung
+5. fertiger Golffilm und daraus abgeleitete Social-Clips
+
+Leitidee: **“Turn the whole round into the finished film.”**
+
+Der DJI-Multicam-Fix kann später als kurzer Build-Log oder Produktfortschritt erscheinen. Er ist kein Launch-Thema und trägt nicht allein die Positionierung von CUT18.
 
 ## Launch- und Beta-Gates
 
