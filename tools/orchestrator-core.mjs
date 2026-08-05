@@ -56,7 +56,7 @@ export function buildReport({ status, roadmap, issues, generatedAt = new Date() 
         : 'Keine offenen Aufgaben gefunden. Roadmap und Issues prüfen.';
     const approvalText = approvals.length ? approvals.map((item) => `- ${item}`).join('\n') : '- Keine offenen Freigaben dokumentiert.';
 
-    return `# Golf Studio – Orchestrator-Bericht
+    return `# CUT18 – Orchestrator-Bericht
 
 Erzeugt: ${generatedAt.toISOString()}
 

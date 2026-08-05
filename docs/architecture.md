@@ -2,7 +2,7 @@
 
 ## Entscheidung
 
-Golf Studio bleibt für die nächste Produktphase bei **Electron + React + TypeScript**. Diese Entscheidung nutzt die vorhandene App, minimiert einen riskanten Rewrite und bietet einen gut automatisierbaren Entwicklungs- und Testpfad. Sie wird nach dem Windows-MVP anhand gemessener Startzeit, Speicherbedarf, Paketgröße und Video-Performance überprüft.
+CUT18 bleibt für die nächste Produktphase bei **Electron + React + TypeScript**. Diese Entscheidung nutzt die vorhandene App, minimiert einen riskanten Rewrite und bietet einen gut automatisierbaren Entwicklungs- und Testpfad. Sie wird nach dem Windows-MVP anhand gemessener Startzeit, Speicherbedarf, Paketgröße und Video-Performance überprüft.
 
 ## Bewertete Alternativen
 

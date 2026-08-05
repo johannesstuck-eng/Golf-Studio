@@ -91,6 +91,31 @@ export interface MulticamGroup {
     mediaIds: string[];
     createdAt: string;
     syncStatus: 'timestamp-only' | 'manual' | 'audio';
+    syncOffsetsSeconds?: Record<string, number>;
+}
+
+export type MulticamSyncConfidence = 'high' | 'medium' | 'low';
+
+export interface MulticamAudioSyncRequest {
+    groupId: string;
+    media: Array<Pick<MediaItem, 'id' | 'path' | 'recordedAt' | 'durationSeconds' | 'hasAudio'>>;
+}
+
+export interface MulticamAudioSyncResult {
+    groupId: string;
+    referenceMediaId: string | null;
+    referenceByMediaId: Record<string, string>;
+    offsetsSeconds: Record<string, number>;
+    confidenceByMediaId: Record<string, MulticamSyncConfidence>;
+    waveforms: Record<string, number[]>;
+    failures: string[];
+}
+
+export interface MulticamSyncProgress {
+    groupId: string;
+    completed: number;
+    total: number;
+    message: string;
 }
 
 export interface GolfBlock {
@@ -131,6 +156,31 @@ export interface CourseData {
     holes: HoleData[];
 }
 
+export interface ScorecardHoleCandidate {
+    number: number;
+    sourceLabel: string;
+    par: number;
+    lengthMeters: number;
+    strokeIndex: number;
+}
+
+export interface ScorecardTeeCandidate {
+    id: string;
+    label: string;
+    holes: ScorecardHoleCandidate[];
+}
+
+export interface ScorecardAnalysis {
+    status: 'ready' | 'manual';
+    tees: ScorecardTeeCandidate[];
+    warnings: string[];
+}
+
+export interface ScorecardChooseResult extends ScorecardAnalysis {
+    canceled: boolean;
+    path?: string;
+}
+
 export interface VirtualSequence {
     id: string;
     sourceType: SourceType;
@@ -138,9 +188,18 @@ export interface VirtualSequence {
     inFrame: number;
     outFrame: number;
     sourceFps: number;
+    activeMediaId?: string;
+    multicamAngles?: MulticamAngle[];
     targetBlockId: string;
     createdAt: string;
     updatedAt: string;
+}
+
+export interface MulticamAngle {
+    mediaId: string;
+    inFrame: number;
+    outFrame: number;
+    sourceFps: number;
 }
 
 export type OverlayType = 'player-card' | 'hole-info' | 'score-card';
@@ -243,6 +302,8 @@ export interface SequenceDraft {
     inFrame: number;
     outFrame: number;
     sourceFps: number;
+    activeMediaId?: string;
+    multicamAngles?: MulticamAngle[];
     hole: number;
     playerId: string;
     blockType: BlockType;

@@ -1,6 +1,6 @@
 # Produktstatus
 
-Stand: 4. August 2026
+Stand: 5. August 2026
 
 ## Einordnung
 
@@ -11,7 +11,11 @@ Der vorhandene Code ist deutlich weiter als ein leerer Baseline-Prototyp. Er ent
 - dunkle Electron-/React-Oberfläche für Windows
 - lokaler Video- und Audioimport über Electron-IPC
 - `.golfcut`-Projektmodell mit Schema-Migration
-- framebasierte virtuelle Sequenzen und Golfblöcke
+- Round Builder mit Zuordnung nach Loch, Spieler und Schlagblock
+- lokale PDF-Scorecard-Erkennung mit Abschlagsauswahl und kontrollierter Übernahme von Par, Länge und Vorgabe
+- automatische Spielerreihenfolge und strukturierter Rohschnitt
+- framebasierte virtuelle Sequenzen, Golfblöcke und Multicam-Vorschläge
+- fester Editorial-Look mit Loch-, Score-, Spieler- und Schlaginformationen
 - manuelle Shot-Tracer-Geometrie und Kamera-Lock
 - lokale FFprobe-/FFmpeg-Integration und Exportprofile
 - Unit-Tests für Modell-, Tracer-, Export- und Erkennungslogik
@@ -26,10 +30,11 @@ Der vorhandene Code ist deutlich weiter als ein leerer Baseline-Prototyp. Er ent
 - signierte Builds und Update-Strategie
 - getestete Barrierefreiheit und vollständige UX-Validierung
 - Beta-Programm, Preis oder Vertriebsprozess
+- automatische Erkennung fotografierter oder gescannter Scorecards
 
 ## Wichtigster aktueller Engpass
 
-Die technische Breite ist größer als die validierte Produktqualität. Priorität hat daher eine schmale, reproduzierbare Import–Wiedergabe–Export-Kette auf Windows mit Testmaterial und klaren Akzeptanzkriterien.
+Die technische Breite ist größer als die validierte Produktqualität. Priorität hat daher ein schmaler, reproduzierbarer End-to-End-Beleg des eigentlichen Produktversprechens: vom importierten Rundenmaterial über die Golfstruktur und den zusammenhängenden Rohschnitt bis zum lokalen Export auf Windows.
 
 ## Offene Freigaben
 

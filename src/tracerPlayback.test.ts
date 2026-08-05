@@ -39,6 +39,18 @@ describe('shot tracer playback state', () => {
         expect(tracerVisualState({ ...tracer, points }, 30).progress).toBe(1);
     });
 
+    it('uses curve handles only for shape and not as artificial timing brakes', () => {
+        const points = [
+            { frame: 10, x: .1, y: .8, kind: 'impact' as const },
+            { frame: 20, x: .5, y: .1, kind: 'curve' as const },
+            { frame: 50, x: .9, y: .7, kind: 'landing' as const },
+        ];
+        const progressAtHandleFrame = tracerProgressAtFrame(points, 20);
+        expect(progressAtHandleFrame).toBeCloseTo(.25, 5);
+        expect(progressAtHandleFrame).toBeLessThan(.5);
+        expect(tracerProgressAtFrame(points, 30)).toBeCloseTo(.5, 5);
+    });
+
     it('keeps the tracer overlay visible across foreground obstacles', () => {
         const legacyOcclusion = { ...tracer, occlusionStartFrame: 24, occlusionEndFrame: 45 };
         expect(tracerVisualState(legacyOcclusion, 30)).toMatchObject({ opacity: 1, occluded: false });

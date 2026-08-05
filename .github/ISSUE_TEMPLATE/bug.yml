@@ -26,7 +26,7 @@ body:
     id: environment
     attributes:
       label: Umgebung
-      description: Golf-Studio-Version, Windows-Version, Hardware und verwendetes Medienformat – keine privaten Pfade oder Medien hochladen.
+      description: CUT18-Version, Windows-Version, Hardware und verwendetes Medienformat – keine privaten Pfade oder Medien hochladen.
     validations:
       required: true
   - type: textarea

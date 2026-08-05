@@ -1,6 +1,8 @@
-# Golf Studio
+# CUT18
 
-Golf Studio ist eine lokale Windows-Desktop-App für Golfer und Golf-Content-Creator. Sie soll Golfvideos importieren, Schläge und Runden strukturieren, Shot-Tracer und Overlays ergänzen und fertige Clips exportieren. Windows ist die erste Zielplattform; macOS folgt später.
+CUT18 ist das lokale Schnitt-Playbook für komplette Golfvideos. Die Windows-Desktop-App führt Golfer und Golf-Content-Creator vom Rohmaterial über die Struktur nach Löchern, Spielern und Schlägen zum zusammenhängenden Rohschnitt und ergänzt Multicam, Golf-Overlays und Shot-Tracer innerhalb desselben Workflows. Aus einem Projekt sollen sich vollständige Rundenvideos, einzelne Löcher und Social Clips exportieren lassen. Windows ist die erste Zielplattform; macOS folgt später.
+
+**Marke:** CUT18 · **Claim:** Deine Runde. Dein Film. · **vorgesehene URL:** `cut18.app` · **vorgesehener Social-Handle:** `@cut18golf`. Domain und Accounts sind noch nicht registriert.
 
 > Status: technischer Prototyp. Die vorhandenen Funktionen sind eine gute Ausgangsbasis, aber noch kein freigegebenes oder verkaufsfertiges Produkt. Siehe [Produktstatus](docs/product-status.md) und [MVP-Umfang](docs/mvp-scope.md).
 
@@ -44,6 +46,8 @@ npm run orchestrate -- --repo johannesstuck-eng/Golf-Studio
 
 Der Bericht landet unter `reports/orchestrator-report.md`. Mit `--issues <datei.json>` kann stattdessen ein lokaler Issues-Snapshot verwendet werden.
 
+Das lokale **Mission Control** liest Issues und Pull Requests direkt aus GitHub und zeigt den gewichteten Fortschritt pro Agent sowie für das Gesamtprojekt. Das Statusmodell ist in [docs/agent-dashboard.md](docs/agent-dashboard.md) dokumentiert; die App speichert dafür keinen GitHub-Token.
+
 ## Arbeitsweise und Sicherheit
 
 - keine direkte Arbeit auf `main`
@@ -60,6 +64,9 @@ Die verbindlichen Regeln stehen in [AGENTS.md](AGENTS.md) und [docs/approval-pol
 - [Produktstatus](docs/product-status.md)
 - [MVP-Umfang](docs/mvp-scope.md)
 - [Roadmap](docs/roadmap.md)
+- [Agent Dashboard](docs/agent-dashboard.md)
 - [Architektur](docs/architecture.md)
 - [Business-Hypothesen](docs/business-hypotheses.md)
+- [Landingpage-Textentwurf](docs/landing-page-copy.md)
+- [Markengrundlage](docs/brand.md)
 - [Freigaberichtlinie](docs/approval-policy.md)

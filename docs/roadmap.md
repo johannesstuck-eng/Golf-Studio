@@ -17,14 +17,18 @@ Prioritäten sind Hypothesen und werden nach Tests neu bewertet.
 - [ ] lokale Wiedergabe und framegenaue Navigation validieren
 - [ ] FFmpeg/FFprobe-Erkennung und verständliche Diagnose
 - [ ] Projektformat spezifizieren und Migrationstests erweitern
-- [ ] Timeline-/Clip-Grundlage auf einen klaren MVP-Pfad reduzieren
+- [ ] Round-Builder und Golfstruktur als klaren MVP-Kernpfad validieren
+- [x] textbasierte PDF-Scorecards lokal auslesen und vor der Übernahme kontrollieren
+- [ ] Foto-/Scan-Scorecards zuverlässig erkennen
+- [ ] automatische Spieler- und Schlagreihenfolge für einen zusammenhängenden Rohschnitt validieren
 - [ ] Export-Pipeline mit echten Golden-Sample-Tests prüfen
 
 ## Phase 2 – Golf-Differenzierung
 
 - [ ] manuellen Shot-Tracer mit Nutzern testen
 - [ ] Overlay-Workflow vereinfachen
-- [ ] komplette Runde und Spielerreihenfolge validieren
+- [ ] Multicam innerhalb des Round-Playbooks validieren
+- [ ] einzelne Löcher und Social Clips aus dem Rundenprojekt ableiten
 - [ ] automatische Vorschläge nur mit messbarer Qualität ausbauen
 
 ## Phase 3 – Private Beta

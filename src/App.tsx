@@ -2,13 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Aperture, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, CalendarClock, Camera, Check, ChevronLeft, ChevronRight,
     CircleHelp, ClipboardList, Clock3, Copy, Download, FileAudio, FileVideo, Film, Flag, FolderOpen, HardDrive,
-    ImageUp, Import, Layers, LayoutGrid, MonitorPlay, Pause, Pencil, Play, Plus, RotateCcw, Save,
+    ImageUp, Import, Layers, LayoutDashboard, LayoutGrid, MonitorPlay, Pause, Pencil, Play, Plus, RotateCcw, Save,
     Crosshair, Scissors, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Trophy, Users, WandSparkles, X,
 } from 'lucide-react';
 import {
-    addBlock, blockLabel, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
+    addBlock, applyScorecardTee, blockLabel, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
     effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence,
-    normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setScorecardSource,
+    multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia,
     suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore,
     updateSequenceOverlay, updateShotTracer, upsertSequence,
 } from './model';
@@ -21,10 +21,14 @@ import {
     type GolfProject,
     type MediaItem,
     type MediaEngineStatus,
+    type MulticamAudioSyncResult,
+    type MulticamAngle,
     type MulticamGroup,
+    type MulticamSyncProgress,
     type OverlayPosition,
     type OverlayType,
     type ProjectSettings,
+    type ScorecardChooseResult,
     type ShotTracerEffect,
     type CameraLockPoint,
     type ShotTracerCameraLock,
@@ -38,9 +42,12 @@ import { buildExportSummary } from './exportProfile';
 import { EDITORIAL_STYLE, editorialTransition, scoreBeforeHole } from './editorialStyle';
 import { createTracerFlight, insertTracerIntermediate } from './tracerWorkflow';
 import { lockTracerPointsToWorld, screenToWorld, svgCameraMatrix, worldToScreen } from './cameraLock';
+import { Dashboard } from './AgentDashboard';
+import { firstSequenceForHole, summarizeRoundDesk, type HoleStoryStatus } from './roundDesk';
+import { sequencePlaybackSource } from './roughCut';
 
 const makeId = () => crypto.randomUUID();
-type StudioScreen = 'import' | 'review' | 'build' | 'export';
+type StudioScreen = 'round' | 'import' | 'review' | 'build' | 'export';
 type TracerWorkflowStep = 'impact-frame' | 'impact-point' | 'landing-frame' | 'landing-point' | 'intermediate-frame' | 'intermediate-point' | 'edit';
 type CameraLockStep = 'impact-a' | 'impact-b' | 'landing-a' | 'landing-b';
 
@@ -159,18 +166,19 @@ function fileUrl(filePath: string): string {
 }
 
 function Brand() {
-    return <div className="brand"><span className="brand-mark"><Aperture size={20} /></span><span>GOLF ROUND <b>STUDIO</b></span></div>;
+    return <div className="brand"><span className="brand-mark"><Aperture size={20} /></span><span>CUT<b>18</b></span></div>;
 }
 
 interface SetupProps {
     onCreate: (settings: ProjectSettings) => void;
     onOpen: () => void;
     onRetryMediaEngine: () => void;
+    onDashboard: () => void;
     error: string;
     mediaEngineStatus: MediaEngineStatus | null;
 }
 
-function SetupScreen({ onCreate, onOpen, onRetryMediaEngine, error, mediaEngineStatus }: SetupProps) {
+function SetupScreen({ onCreate, onOpen, onRetryMediaEngine, onDashboard, error, mediaEngineStatus }: SetupProps) {
     const [course, setCourse] = useState('');
     const [holes, setHoles] = useState<9 | 18>(9);
     const [players, setPlayers] = useState([{ id: makeId(), name: 'Joe' }, { id: makeId(), name: 'Ferdi' }]);
@@ -179,7 +187,7 @@ function SetupScreen({ onCreate, onOpen, onRetryMediaEngine, error, mediaEngineS
     const [frameRate, setFrameRate] = useState<30 | 60>(60);
     const valid = course.trim() && players.some((player) => player.name.trim());
     return <main className="setup-shell">
-        <header className="setup-brand"><Brand /></header>
+        <header className="setup-brand"><Brand /></header><button className="mission-entry setup" onClick={onDashboard}><LayoutDashboard size={16} /> Mission Control</button>
         <section className="setup-card">
             <div className="eyebrow"><span /> NEUES PROJEKT</div>
             <h1>Welche Runde<br />schneiden wir?</h1>
@@ -227,18 +235,20 @@ function OptionButtons({ label, values, labels, value, onChange, suffix = '' }: 
     return <div><span className="field-label">{label}</span><div className={`segmented columns-${values.length}`}>{values.map((item, index) => <button type="button" className={value === item ? 'active' : ''} onClick={() => onChange(item)} key={item}>{labels?.[index] ?? item}{suffix}</button>)}</div></div>;
 }
 
-function TopBar({ screen, onScreen, onSave }: { screen: StudioScreen; onScreen: (value: StudioScreen) => void; onSave: () => void }) {
+function TopBar({ project, screen, onScreen, onSave, onDashboard }: { project: GolfProject; screen: StudioScreen; onScreen: (value: StudioScreen) => void; onSave: () => void; onDashboard: () => void }) {
     return <header className="topbar"><Brand /><nav className="steps">
-        <button className={screen === 'import' ? 'active' : 'done'} onClick={() => onScreen('import')}><b>1</b> Import</button><i />
-        <button className={screen === 'review' ? 'active' : screen === 'build' || screen === 'export' ? 'done' : ''} onClick={() => onScreen('review')}><b>2</b> Sichten</button><i />
+        <button className={screen === 'round' ? 'active round-step' : 'round-step'} onClick={() => onScreen('round')}><Flag size={14} /> Round Desk</button><i />
+        <button className={screen === 'import' ? 'active' : project.media.length ? 'done' : ''} onClick={() => onScreen('import')}><b>1</b> Import</button><i />
+        <button className={screen === 'review' ? 'active' : project.sequences.length ? 'done' : ''} onClick={() => onScreen('review')}><b>2</b> Sichten</button><i />
         <button className={screen === 'build' ? 'active' : screen === 'export' ? 'done' : ''} onClick={() => onScreen('build')}><b>3</b> Runde bauen</button><i /><button className={screen === 'export' ? 'active' : ''} onClick={() => onScreen('export')}><b>4</b> Export</button>
-    </nav><div className="top-actions"><button className="icon-button" title="Hilfe"><CircleHelp size={19} /></button><button className="secondary" onClick={onSave}><Save size={16} /> Speichern</button></div></header>;
+    </nav><div className="top-actions"><button className="icon-button" title="Mission Control" onClick={onDashboard}><LayoutDashboard size={18} /></button><button className="icon-button" title="Hilfe"><CircleHelp size={19} /></button><button className="secondary" onClick={onSave}><Save size={16} /> Speichern</button></div></header>;
 }
 
 function Sidebar({ project, screen, onScreen, onNew }: { project: GolfProject; screen: StudioScreen; onScreen: (value: StudioScreen) => void; onNew: () => void }) {
     return <aside className="sidebar">
         <div className="project-summary"><span>AKTUELLES PROJEKT</span><h2>{project.settings.course}</h2><p>{project.settings.holes} Loch · {project.settings.players.map((player) => player.name).join(' & ')}</p></div>
         <div className="side-section"><div className="side-label">PROJEKT</div>
+            <button className={`side-link ${screen === 'round' ? 'active' : ''}`} onClick={() => onScreen('round')}><Film size={17} /> Round Desk <span>{project.settings.holes}</span></button>
             <button className={`side-link ${screen === 'import' ? 'active' : ''}`} onClick={() => onScreen('import')}><Import size={17} /> Medienimport <span>{project.media.length || ''}</span></button>
             <button className={`side-link ${screen === 'review' ? 'active' : ''}`} onClick={() => onScreen('review')}><Scissors size={17} /> Sichten <span>{project.sequences.length || ''}</span></button>
             <button className={`side-link ${screen === 'build' ? 'active' : ''}`} onClick={() => onScreen('build')}><LayoutGrid size={17} /> Runde bauen <span>{project.settings.holes}</span></button>
@@ -261,6 +271,8 @@ function ImportScreen({ project, setProject, onReview }: ImportProps) {
     const [busy, setBusy] = useState(false);
     const [selected, setSelected] = useState<string | null>(null);
     const [message, setMessage] = useState('');
+    const [syncingSuggestionId, setSyncingSuggestionId] = useState<string | null>(null);
+    const [syncProgress, setSyncProgress] = useState<MulticamSyncProgress | null>(null);
     const suggestions = useMemo(() => suggestMulticam(project.media), [project.media]);
     const mergeMedia = (incoming: MediaItem[]) => {
         const known = new Set(project.media.map((media) => media.path.toLowerCase()));
@@ -276,12 +288,32 @@ function ImportScreen({ project, setProject, onReview }: ImportProps) {
         catch (error) { setMessage(error instanceof Error ? error.message : 'Import fehlgeschlagen.'); }
         finally { setBusy(false); }
     };
-    const acceptGroup = (groupId: string) => {
+    const acceptGroup = async (groupId: string) => {
         const suggestion = suggestions.find((item) => item.id === groupId);
         if (!suggestion) return;
         if (project.groups.some((group) => group.mediaIds.length === suggestion.mediaIds.length && group.mediaIds.every((id) => suggestion.mediaIds.includes(id)))) return;
         const group: MulticamGroup = { id: makeId(), name: `Multicam ${project.groups.length + 1}`, mediaIds: suggestion.mediaIds, createdAt: new Date().toISOString(), syncStatus: 'timestamp-only' };
-        setProject({ ...project, groups: [...project.groups, group], modifiedAt: new Date().toISOString() });
+        const withGroup = { ...project, groups: [...project.groups, group], modifiedAt: new Date().toISOString() };
+        setProject(withGroup);
+        if (!window.golfStudio) return;
+        setSyncingSuggestionId(groupId);
+        setMessage('Multicam-Tonspuren werden automatisch synchronisiert …');
+        const unsubscribe = window.golfStudio.onMulticamSyncProgress((progress) => { if (progress.groupId === group.id) setSyncProgress(progress); });
+        try {
+            const media = group.mediaIds.map((id) => withGroup.media.find((item) => item.id === id)).filter((item): item is MediaItem => Boolean(item));
+            const result = await window.golfStudio.syncMulticamAudio({ groupId: group.id, media });
+            const synchronized = Object.keys(result.offsetsSeconds).length >= 2
+                ? setMulticamSyncOffsets(withGroup, group.id, result.offsetsSeconds, 'audio')
+                : withGroup;
+            setProject(synchronized);
+            setMessage(Object.keys(result.offsetsSeconds).length >= 2
+                ? `${group.name} wurde über ${Object.keys(result.offsetsSeconds).length} Tonspuren synchronisiert.`
+                : `${group.name} wurde angelegt. Die Tonspuren waren nicht eindeutig; Zeitstempel bleiben aktiv.`);
+        } catch (error) {
+            setMessage(error instanceof Error ? error.message : 'Die automatische Tonsynchronisierung ist fehlgeschlagen.');
+        } finally {
+            unsubscribe(); setSyncingSuggestionId(null); setSyncProgress(null);
+        }
     };
     return <section className="workspace import-workspace">
         <div className="workspace-heading"><div><div className="eyebrow"><span /> MEDIENIMPORT</div><h1>Rohmaterial hinzufügen</h1><p>Videos und Audiodateien werden nur analysiert – niemals kopiert oder hochgeladen.</p></div>{project.media.length > 0 && <button className="primary" onClick={choose}><Plus size={16} /> Dateien hinzufügen</button>}</div>
@@ -299,49 +331,95 @@ function ImportScreen({ project, setProject, onReview }: ImportProps) {
         </section><aside className="suggestions-panel"><div className="suggestion-title"><WandSparkles size={19} /><div><h3>Multicam-Vorschläge</h3><span>Basierend auf Aufnahmezeiten</span></div></div>{suggestions.length ? suggestions.map((suggestion, index) => {
             const sources = suggestion.mediaIds.map((id) => project.media.find((media) => media.id === id)).filter(Boolean) as MediaItem[];
             const accepted = project.groups.some((group) => group.mediaIds.length === suggestion.mediaIds.length && group.mediaIds.every((id) => suggestion.mediaIds.includes(id)));
-            return <article className="suggestion-card" key={suggestion.id}><div className="confidence"><span className={suggestion.confidence} /> {suggestion.confidence === 'high' ? 'SEHR WAHRSCHEINLICH' : suggestion.confidence === 'medium' ? 'WAHRSCHEINLICH' : 'UNKLAR'}</div><div className="suggestion-name"><span>G{index + 1}</span><div><b>{formatClock(suggestion.startAt)}</b><small>{sources.length} Quellen · {formatDuration((Date.parse(suggestion.endAt) - Date.parse(suggestion.startAt)) / 1000)}</small></div></div><div className="source-stack">{sources.slice(0, 4).map((source) => <span title={source.name} key={source.id}>{source.kind === 'audio' ? <FileAudio size={14} /> : <Camera size={14} />}{source.device.replace('DJI ', '')}</span>)}</div><p>{suggestion.reason}</p><button className={`accept ${accepted ? 'accepted' : ''}`} disabled={accepted} onClick={() => acceptGroup(suggestion.id)}><Check size={15} /> {accepted ? 'Gruppe angelegt' : 'Als Gruppe anlegen'}</button></article>;
+            const synchronizing = syncingSuggestionId === suggestion.id;
+            return <article className="suggestion-card" key={suggestion.id}><div className="confidence"><span className={suggestion.confidence} /> {suggestion.confidence === 'high' ? 'SEHR WAHRSCHEINLICH' : suggestion.confidence === 'medium' ? 'WAHRSCHEINLICH' : 'UNKLAR'}</div><div className="suggestion-name"><span>G{index + 1}</span><div><b>{formatClock(suggestion.startAt)}</b><small>{sources.length} Quellen · {formatDuration((Date.parse(suggestion.endAt) - Date.parse(suggestion.startAt)) / 1000)}</small></div></div><div className="source-stack">{sources.slice(0, 4).map((source) => <span title={source.name} key={source.id}>{source.kind === 'audio' ? <FileAudio size={14} /> : <Camera size={14} />}{source.device.replace('DJI ', '')}</span>)}</div><p>{synchronizing ? syncProgress?.message ?? 'Tonspuren werden vorbereitet …' : suggestion.reason}</p>{synchronizing && <div className="sync-progress"><span style={{ width: `${syncProgress ? syncProgress.completed / Math.max(1, syncProgress.total) * 100 : 8}%` }} /></div>}<button className={`accept ${accepted ? 'accepted' : ''}`} disabled={accepted || Boolean(syncingSuggestionId)} onClick={() => void acceptGroup(suggestion.id)}><Check size={15} /> {synchronizing ? 'Synchronisiere …' : accepted ? 'Gruppe angelegt' : 'Anlegen & automatisch synchronisieren'}</button></article>;
         }) : <div className="empty-suggestions"><Sparkles size={24} /><b>Noch keine Überschneidungen</b><p>Importiere Aufnahmen mehrerer Kameras mit ungefähr gleicher Gerätezeit.</p></div>}</aside></div> : <section className="how-it-works"><div><span>01</span><b>Alles auf einmal importieren</b><p>Osmo, iPhone und Mikrofondateien können gemeinsam ausgewählt werden.</p></div><div><span>02</span><b>Geräte werden erkannt</b><p>Aufnahmezeit, Dauer, Codec, Auflösung und Tonspuren werden lokal ausgelesen.</p></div><div><span>03</span><b>Direkt mit dem Sichten beginnen</b><p>Rohclip öffnen, In und Out markieren und einem Golfblock zuweisen.</p></div></section>}
     </section>;
 }
 
-interface ReviewProps { project: GolfProject; setProject: (project: GolfProject) => void; initialMediaId?: string; initialSequenceId?: string }
+interface ReviewProps { project: GolfProject; setProject: (project: GolfProject) => void; initialMediaId?: string; initialSequenceId?: string; initialHole?: number }
 
-function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }: ReviewProps) {
+function WaveformRow({ label, values, localSeconds, durationSeconds, reference = false }: { label: string; values: number[]; localSeconds: number; durationSeconds: number; reference?: boolean }) {
+    const analyzedDuration = Math.min(600, durationSeconds);
+    const center = values.length ? Math.round(Math.min(1, Math.max(0, localSeconds / Math.max(1, analyzedDuration))) * (values.length - 1)) : 0;
+    const radius = Math.min(90, Math.max(30, Math.round(values.length / Math.max(1, analyzedDuration) * 8)));
+    const windowValues = Array.from({ length: radius * 2 + 1 }, (_, index) => values[center - radius + index] ?? 0);
+    return <div className={`waveform-row ${reference ? 'reference' : ''}`}><div><b>{label}</b><small>{reference ? 'REFERENZ' : `${localSeconds.toFixed(2)} s`}</small></div><div className="waveform-window"><span className="waveform-playhead" />{windowValues.map((value, index) => <i style={{ height: `${Math.max(3, value * 100)}%` }} key={index} />)}</div></div>;
+}
+
+function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId, initialHole }: ReviewProps) {
     const requestedSequence = project.sequences.find((sequence) => sequence.id === initialSequenceId);
     const requestedBlock = project.blocks.find((block) => block.id === requestedSequence?.targetBlockId);
     const videoRef = useRef<HTMLVideoElement>(null);
     const audioRef = useRef<HTMLAudioElement>(null);
+    const previewRefs = useRef(new Map<string, HTMLVideoElement>());
     const initialLoad = useRef(Boolean(requestedSequence));
     const player = () => videoRef.current ?? audioRef.current;
     const [sourceType, setSourceType] = useState<SourceType>(requestedSequence?.sourceType ?? 'media');
     const [sourceId, setSourceId] = useState(requestedSequence?.sourceId ?? initialMediaId ?? project.media[0]?.id ?? '');
+    const initialGroup = project.groups.find((group) => group.id === requestedSequence?.sourceId);
+    const [activeMediaId, setActiveMediaId] = useState(requestedSequence?.activeMediaId ?? initialGroup?.mediaIds[0] ?? '');
     const [currentFrame, setCurrentFrame] = useState(requestedSequence?.inFrame ?? 0);
     const [inFrame, setInFrame] = useState(requestedSequence?.inFrame ?? 0);
     const [outFrame, setOutFrame] = useState(requestedSequence?.outFrame ?? 1);
     const [playing, setPlaying] = useState(false);
     const [playSelection, setPlaySelection] = useState(false);
-    const [hole, setHole] = useState(requestedBlock?.hole ?? 1);
+    const [hole, setHole] = useState(requestedBlock?.hole ?? initialHole ?? 1);
     const [playerId, setPlayerId] = useState(requestedBlock?.playerId ?? project.settings.players[0]?.id ?? '');
+    const [blockType, setBlockType] = useState<BlockType>(requestedBlock?.type ?? 'tee-shot');
     const [targetBlockId, setTargetBlockId] = useState(requestedBlock?.id ?? '');
     const [editingId, setEditingId] = useState<string | undefined>(requestedSequence?.id);
     const [message, setMessage] = useState('');
+    const [syncAnalysis, setSyncAnalysis] = useState<MulticamAudioSyncResult | null>(null);
+    const [syncProgress, setSyncProgress] = useState<MulticamSyncProgress | null>(null);
+    const [syncBusy, setSyncBusy] = useState(false);
+    const [syncOpen, setSyncOpen] = useState(false);
+    const [draftSyncOffset, setDraftSyncOffset] = useState(0);
+    const currentGroup = sourceType === 'group' ? project.groups.find((group) => group.id === sourceId) : undefined;
+    const groupTimeline = sourceType === 'group' ? multicamTimeline(project, sourceId) : null;
+    const groupMedia = groupTimeline?.media ?? [];
     const source = sourceType === 'media'
         ? project.media.find((media) => media.id === sourceId)
-        : project.media.find((media) => project.groups.find((group) => group.id === sourceId)?.mediaIds.includes(media.id) && media.kind === 'video')
-            ?? project.media.find((media) => project.groups.find((group) => group.id === sourceId)?.mediaIds.includes(media.id));
-    const fps = source?.fps && source.fps > 0 ? source.fps : project.settings.frameRate ?? 30;
-    const maxFrames = Math.max(1, Math.round((source?.durationSeconds ?? 0) * fps));
+        : groupMedia.find((media) => media.id === activeMediaId) ?? groupMedia[0];
+    const activeSyncOffset = sourceType === 'group' && source ? multicamSyncOffset(project, sourceId, source.id) : 0;
+    const fps = sourceType === 'group'
+        ? groupTimeline?.fps ?? project.settings.frameRate ?? 30
+        : source?.fps && source.fps > 0 ? source.fps : project.settings.frameRate ?? 30;
+    const maxFrames = Math.max(1, Math.round((sourceType === 'group' && groupTimeline
+        ? (groupTimeline.endMs - groupTimeline.startMs) / 1000
+        : source?.durationSeconds ?? 0) * fps));
     const sourceSequences = project.sequences.filter((sequence) => sequence.sourceType === sourceType && sequence.sourceId === sourceId);
     const availableBlocks = project.blocks
         .filter((block) => block.hole === hole && block.playerId === playerId)
         .sort((left, right) => left.order - right.order);
-    const targetBlock = availableBlocks.find((block) => block.id === targetBlockId) ?? availableBlocks[0];
+    const matchingBlocks = availableBlocks.filter((block) => block.type === blockType);
+    const targetBlock = matchingBlocks.find((block) => block.id === targetBlockId) ?? matchingBlocks[0];
+    const effectiveMediaStartMs = useCallback((media: MediaItem): number => {
+        const stored = multicamMediaStartMs(project, sourceId, media);
+        if (sourceType !== 'group' || media.id !== source?.id) return stored;
+        return stored - (draftSyncOffset - multicamSyncOffset(project, sourceId, media.id)) * 1000;
+    }, [draftSyncOffset, project, source?.id, sourceId, sourceType]);
+    const masterTimeMs = groupTimeline ? groupTimeline.startMs + currentFrame / fps * 1000 : 0;
+    const visibleGroupMedia = sourceType === 'group' ? groupMedia.filter((media) => {
+        const mediaStart = effectiveMediaStartMs(media);
+        return masterTimeMs >= mediaStart && masterTimeMs <= mediaStart + media.durationSeconds * 1000;
+    }) : [];
+    const selectionCameraCount = sourceType === 'group' ? multicamAnglesForRange(project, sourceId, inFrame, outFrame, fps).length : 0;
+    const mediaTimeForFrame = useCallback((frame: number, media: MediaItem): number => {
+        if (sourceType !== 'group' || !groupTimeline) return frame / fps;
+        const offsetSeconds = (effectiveMediaStartMs(media) - groupTimeline.startMs) / 1000;
+        return Math.min(media.durationSeconds, Math.max(0, frame / fps - offsetSeconds));
+    }, [effectiveMediaStartMs, fps, groupTimeline, sourceType]);
     const seek = useCallback((frame: number) => {
         const target = Math.min(maxFrames, Math.max(0, Math.round(frame)));
         setCurrentFrame(target);
         const element = player();
-        if (element) element.currentTime = target / fps;
-    }, [fps, maxFrames]);
+        if (element && source) element.currentTime = mediaTimeForFrame(target, source);
+        if (sourceType === 'group') previewRefs.current.forEach((preview, mediaId) => {
+            const media = groupMedia.find((item) => item.id === mediaId);
+            if (media && preview.readyState >= 1) preview.currentTime = mediaTimeForFrame(target, media);
+        });
+    }, [groupMedia, maxFrames, mediaTimeForFrame, source, sourceType]);
     const resetMarks = useCallback(() => {
         setCurrentFrame(0); setInFrame(0); setOutFrame(Math.min(maxFrames, Math.max(1, Math.round(fps * 5)))); setEditingId(undefined); setMessage('');
     }, [fps, maxFrames]);
@@ -350,8 +428,34 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
         resetMarks();
     }, [sourceId, sourceType, resetMarks]);
     useEffect(() => {
-        if (!availableBlocks.some((block) => block.id === targetBlockId)) setTargetBlockId(availableBlocks[0]?.id ?? '');
-    }, [availableBlocks, targetBlockId]);
+        if (sourceType === 'group' && !groupMedia.some((media) => media.id === activeMediaId)) setActiveMediaId(groupMedia[0]?.id ?? '');
+    }, [activeMediaId, groupMedia, sourceType]);
+    useEffect(() => {
+        if (sourceType === 'group' && visibleGroupMedia.length && !visibleGroupMedia.some((media) => media.id === activeMediaId)) setActiveMediaId(visibleGroupMedia[0].id);
+    }, [currentFrame, sourceId]);
+    useEffect(() => {
+        if (!matchingBlocks.some((block) => block.id === targetBlockId)) setTargetBlockId(matchingBlocks[0]?.id ?? '');
+    }, [matchingBlocks, targetBlockId]);
+    useEffect(() => { setDraftSyncOffset(activeSyncOffset); }, [activeMediaId, activeSyncOffset, sourceId]);
+    useEffect(() => { if (source) seek(currentFrame); }, [activeMediaId, draftSyncOffset]);
+    useEffect(() => {
+        if (sourceType !== 'group' || !currentGroup || groupMedia.length < 2 || !window.golfStudio) return;
+        let canceled = false;
+        setSyncBusy(true); setSyncAnalysis(null); setSyncProgress(null);
+        const unsubscribe = window.golfStudio.onMulticamSyncProgress((progress) => { if (!canceled && progress.groupId === sourceId) setSyncProgress(progress); });
+        const media = currentGroup.mediaIds.map((id) => project.media.find((item) => item.id === id)).filter((item): item is MediaItem => Boolean(item));
+        void window.golfStudio.syncMulticamAudio({ groupId: sourceId, media }).then((result) => {
+            if (canceled) return;
+            setSyncAnalysis(result);
+            if (currentGroup.syncStatus === 'timestamp-only' && Object.keys(result.offsetsSeconds).length >= 2) {
+                setProject(setMulticamSyncOffsets(project, sourceId, result.offsetsSeconds, 'audio'));
+                setMessage(`${Object.keys(result.offsetsSeconds).length} Tonspuren automatisch synchronisiert.`);
+            }
+        }).catch((error) => {
+            if (!canceled) setMessage(error instanceof Error ? error.message : 'Tonsynchronisierung fehlgeschlagen.');
+        }).finally(() => { if (!canceled) setSyncBusy(false); });
+        return () => { canceled = true; unsubscribe(); };
+    }, [sourceId, sourceType]);
     useEffect(() => {
         const key = (event: KeyboardEvent) => {
             if ((event.target as HTMLElement)?.matches('input, select, textarea')) return;
@@ -366,30 +470,61 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
     }, [currentFrame, inFrame, seek]);
     const togglePlay = () => { const element = player(); if (element) element.paused ? void element.play() : element.pause(); };
     const playRange = () => { seek(inFrame); setPlaySelection(true); window.setTimeout(() => void player()?.play(), 0); };
+    const frameFromMediaTime = (media: MediaItem, localSeconds: number) => {
+        if (sourceType !== 'group' || !groupTimeline) return Math.round(localSeconds * fps);
+        const offsetSeconds = (effectiveMediaStartMs(media) - groupTimeline.startMs) / 1000;
+        return Math.round((offsetSeconds + localSeconds) * fps);
+    };
+    const handleTimeUpdate = (element: HTMLMediaElement, media: MediaItem) => {
+        const frame = frameFromMediaTime(media, element.currentTime);
+        setCurrentFrame(frame);
+        if (sourceType === 'group') previewRefs.current.forEach((preview, mediaId) => {
+            const previewMedia = groupMedia.find((item) => item.id === mediaId);
+            if (previewMedia && preview.readyState >= 1) preview.currentTime = mediaTimeForFrame(frame, previewMedia);
+        });
+        if (playSelection && frame >= outFrame) { element.pause(); setPlaySelection(false); seek(outFrame); }
+    };
     const saveSequence = () => {
         if (!source) return;
         try {
-            if (!targetBlock) throw new Error('Für diesen Spieler ist noch kein Block vorhanden.');
-            const next = upsertSequence(project, { id: editingId, sourceType, sourceId, inFrame, outFrame, sourceFps: fps, hole, playerId, blockType: targetBlock.type, targetBlockId: targetBlock.id });
-            setProject(next); setEditingId(undefined); setMessage('Sequenz im Projekt gespeichert.');
+            const multicamAngles = sourceType === 'group' ? multicamAnglesForRange(project, sourceId, inFrame, outFrame, fps) : undefined;
+            if (sourceType === 'group' && !multicamAngles?.length) throw new Error('In diesem Bereich ist keine Kamera aktiv.');
+            const selectedMediaId = multicamAngles?.some((angle) => angle.mediaId === activeMediaId) ? activeMediaId : multicamAngles?.[0]?.mediaId;
+            const next = upsertSequence(project, { id: editingId, sourceType, sourceId, inFrame, outFrame, sourceFps: fps, activeMediaId: selectedMediaId, multicamAngles, hole, playerId, blockType, targetBlockId: targetBlock?.id });
+            setProject(next); setEditingId(undefined); setMessage(sourceType === 'group' ? `Multicam-Sequenz mit ${multicamAngles?.length ?? 0} Kameras gespeichert.` : 'Sequenz im Projekt gespeichert.');
         } catch (error) { setMessage(error instanceof Error ? error.message : 'Sequenz konnte nicht gespeichert werden.'); }
     };
     const editSequence = (sequence: VirtualSequence) => {
         const target = project.blocks.find((block) => block.id === sequence.targetBlockId);
         if (!target) return;
-        setEditingId(sequence.id); setInFrame(sequence.inFrame); setOutFrame(sequence.outFrame); setHole(target.hole); setPlayerId(target.playerId); setTargetBlockId(target.id); seek(sequence.inFrame); setMessage('');
+        setEditingId(sequence.id); setInFrame(sequence.inFrame); setOutFrame(sequence.outFrame); setHole(target.hole); setPlayerId(target.playerId); setBlockType(target.type); setTargetBlockId(target.id); setActiveMediaId(sequence.activeMediaId ?? ''); seek(sequence.inFrame); setMessage('');
     };
+    const applySyncDraft = () => {
+        if (sourceType !== 'group' || !source) return;
+        player()?.pause();
+        setProject(setMulticamSyncOffset(project, sourceId, source.id, draftSyncOffset));
+        setMessage(`Feinsynchronisierung für ${source.name} gespeichert.`);
+    };
+    const localReferenceId = source ? syncAnalysis?.referenceByMediaId[source.id] ?? syncAnalysis?.referenceMediaId : syncAnalysis?.referenceMediaId;
+    const referenceMedia = groupMedia.find((media) => media.id === localReferenceId);
+    const referenceLocalTime = referenceMedia ? mediaTimeForFrame(currentFrame, referenceMedia) : 0;
+    const activeLocalTime = source ? mediaTimeForFrame(currentFrame, source) : 0;
+    const activeConfidence = source ? syncAnalysis?.confidenceByMediaId[source.id] : undefined;
+    const contextSummary = summarizeRoundDesk(project);
+    const contextHoleSummary = contextSummary.holes.find((item) => item.hole === hole);
     return <section className="review-workspace">
         <aside className="source-browser"><div className="source-tabs"><button className={sourceType === 'media' ? 'active' : ''} onClick={() => { setSourceType('media'); setSourceId(project.media[0]?.id ?? ''); }}>Clips</button><button className={sourceType === 'group' ? 'active' : ''} onClick={() => { setSourceType('group'); setSourceId(project.groups[0]?.id ?? ''); }}>Multicam</button></div>
             <div className="source-list">{sourceType === 'media' ? project.media.map((media) => <button className={sourceId === media.id ? 'active' : ''} onClick={() => setSourceId(media.id)} key={media.id}><MediaIcon media={media} /><span><b>{media.name}</b><small>{formatDuration(media.durationSeconds)} · {media.fps ?? '?'} fps</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'media' && sequence.sourceId === media.id).length}</em></button>) : project.groups.map((group) => <button className={sourceId === group.id ? 'active' : ''} onClick={() => setSourceId(group.id)} key={group.id}><div className="group-icon"><Layers size={20} /></div><span><b>{group.name}</b><small>{group.mediaIds.length} Quellen</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'group' && sequence.sourceId === group.id).length}</em></button>)}</div>
         </aside>
-        <div className="review-main">{source ? <><div className="review-heading"><div><div className="eyebrow"><span /> SICHTEN & ZUWEISEN</div><h1>{sourceType === 'group' ? project.groups.find((group) => group.id === sourceId)?.name : source.name}</h1><p>{sourceType === 'group' ? 'Primäre Kameraperspektive · Multicam-Feinsynchronisierung folgt separat' : `${source.device} · ${source.width ?? 'Audio'}${source.height ? `×${source.height}` : ''} · ${fps} fps`}</p></div><div className="keyboard-hints"><kbd>←</kbd><kbd>→</kbd> Frame · <kbd>I</kbd> In · <kbd>O</kbd> Out · <kbd>Leertaste</kbd> Play</div></div>
-            <div className="viewer-shell"><div className="viewer">{source.kind === 'video' ? <video ref={videoRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => { const frame = Math.round(event.currentTarget.currentTime * fps); setCurrentFrame(frame); if (playSelection && frame >= outFrame) { event.currentTarget.pause(); setPlaySelection(false); seek(outFrame); } }} onError={() => setMessage('Die Mediendatei konnte nicht geöffnet werden. Prüfe, ob sie noch am gespeicherten Ort liegt.')} /> : <div className="audio-view"><FileAudio size={70} /><b>{source.name}</b><audio ref={audioRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => { const frame = Math.round(event.currentTarget.currentTime * fps); setCurrentFrame(frame); if (playSelection && frame >= outFrame) { event.currentTarget.pause(); setPlaySelection(false); seek(outFrame); } }} /></div>}<button className="viewer-play" onClick={togglePlay}>{playing ? <Pause size={25} /> : <Play size={25} />}</button></div>
+        <div className="review-main">{source ? <>{contextHoleSummary && <div className="moment-round-context"><span>ROUND CUT {contextSummary.progress}%</span><i /><b>LOCH {contextHoleSummary.hole}</b><small>{ROUND_STATUS_COPY[contextHoleSummary.status]}</small></div>}<div className="review-heading"><div><div className="eyebrow"><span /> SICHTEN & ZUWEISEN</div><h1>{sourceType === 'group' ? project.groups.find((group) => group.id === sourceId)?.name : source.name}</h1><p>{sourceType === 'group' ? `${visibleGroupMedia.length || groupMedia.length} Kameras am aktuellen Zeitpunkt · aktive Perspektive: ${source.name}` : `${source.device} · ${source.width ?? 'Audio'}${source.height ? `×${source.height}` : ''} · ${fps} fps`}</p></div><div className="keyboard-hints"><kbd>←</kbd><kbd>→</kbd> Frame · <kbd>I</kbd> In · <kbd>O</kbd> Out · <kbd>Leertaste</kbd> Play</div></div>
+            {sourceType === 'group' && <div className="camera-monitor-grid">{(visibleGroupMedia.length ? visibleGroupMedia : groupMedia.slice(0, 4)).map((media) => <button className={media.id === source.id ? 'active' : ''} onClick={() => { player()?.pause(); setActiveMediaId(media.id); }} key={media.id}><video muted preload="metadata" src={fileUrl(media.path)} ref={(element) => { if (element) previewRefs.current.set(media.id, element); else previewRefs.current.delete(media.id); }} onLoadedMetadata={(event) => { event.currentTarget.currentTime = mediaTimeForFrame(currentFrame, media); }} /><span><b>{media.device}</b><small>{media.name}</small></span>{media.id === source.id && <em>AKTIV</em>}</button>)}</div>}
+            {sourceType === 'group' && <section className={`audio-sync-panel ${syncOpen ? 'open' : ''}`}><header><div><b>{syncBusy ? 'Tonspuren werden analysiert …' : currentGroup?.syncStatus === 'audio' ? 'Automatisch über Ton synchronisiert' : currentGroup?.syncStatus === 'manual' ? 'Manuell feinjustiert' : 'Synchronisierung prüfen'}</b><small>{syncBusy ? syncProgress?.message ?? 'Lokale Audioanalyse läuft im Hintergrund.' : `${groupMedia.length} Kameras · ${syncAnalysis?.failures.length ?? 0} Hinweise`}</small></div><div>{activeConfidence && <span className={`sync-confidence ${activeConfidence}`}>{activeConfidence === 'high' ? 'SICHER' : activeConfidence === 'medium' ? 'PRÜFEN' : 'UNSICHER'}</span>}<button onClick={() => setSyncOpen((open) => !open)}>{syncOpen ? 'Schließen' : 'Tonspuren & Finetuning'}</button></div></header>{syncBusy && <div className="sync-progress"><span style={{ width: `${syncProgress ? syncProgress.completed / Math.max(1, syncProgress.total) * 100 : 8}%` }} /></div>}{syncOpen && <div className="audio-sync-editor">{referenceMedia && <WaveformRow label={referenceMedia.name} values={syncAnalysis?.waveforms[referenceMedia.id] ?? []} localSeconds={referenceLocalTime} durationSeconds={referenceMedia.durationSeconds} reference />}{source.id !== referenceMedia?.id && <WaveformRow label={source.name} values={syncAnalysis?.waveforms[source.id] ?? []} localSeconds={activeLocalTime} durationSeconds={source.durationSeconds} />}<div className="sync-slider"><span>FRÜHER</span><input type="range" min={Math.min(-30, draftSyncOffset - 5)} max={Math.max(30, draftSyncOffset + 5)} step={1 / fps} value={draftSyncOffset} disabled={source.id === referenceMedia?.id} onChange={(event) => setDraftSyncOffset(Number(event.target.value))} /><span>SPÄTER</span><output>{draftSyncOffset >= 0 ? '+' : ''}{draftSyncOffset.toFixed(3)} s</output></div><footer><p>{source.id === referenceMedia?.id ? 'Diese Kamera ist die Referenz. Wähle oben eine andere Kamera für das Finetuning.' : 'Ziehe den Regler, bis markante Tonspitzen und das Bildereignis übereinstimmen.'}</p><button disabled={source.id === referenceMedia?.id || draftSyncOffset === (syncAnalysis?.offsetsSeconds[source.id] ?? 0)} onClick={() => setDraftSyncOffset(syncAnalysis?.offsetsSeconds[source.id] ?? 0)}><RotateCcw size={14} /> Automatik</button><button className="primary" disabled={source.id === referenceMedia?.id || draftSyncOffset === activeSyncOffset} onClick={applySyncDraft}><Check size={14} /> Korrektur übernehmen</button></footer></div>}</section>}
+            <div className="viewer-shell"><div className="viewer">{source.kind === 'video' ? <video ref={videoRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => handleTimeUpdate(event.currentTarget, source)} onError={() => setMessage('Die Mediendatei konnte nicht geöffnet werden. Prüfe, ob sie noch am gespeicherten Ort liegt.')} /> : <div className="audio-view"><FileAudio size={70} /><b>{source.name}</b><audio ref={audioRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => handleTimeUpdate(event.currentTarget, source)} /></div>}<button className="viewer-play" onClick={togglePlay}>{playing ? <Pause size={25} /> : <Play size={25} />}</button></div>
                 <div className="transport"><button onClick={() => seek(currentFrame - 1)} title="Ein Frame zurück"><ChevronLeft size={20} /></button><button className="transport-play" onClick={togglePlay}>{playing ? <Pause size={18} /> : <Play size={18} />}</button><button onClick={() => seek(currentFrame + 1)} title="Ein Frame vor"><ChevronRight size={20} /></button><strong>{frameTime(currentFrame, fps)}</strong><span>Frame {currentFrame} / {maxFrames}</span></div>
                 <Filmstrip currentFrame={currentFrame} inFrame={inFrame} outFrame={outFrame} maxFrames={maxFrames} sequences={sourceSequences} onSeek={seek} onInChange={(frame) => setInFrame(Math.min(frame, outFrame - 1))} onOutChange={(frame) => setOutFrame(Math.max(frame, inFrame + 1))} />
                 <div className="mark-controls"><button onClick={() => setInFrame(Math.min(currentFrame, outFrame - 1))}><b>I</b><span>IN setzen<small>{frameTime(inFrame, fps)} · F{inFrame}</small></span></button><button onClick={playRange}><Play size={17} /><span>Auswahl abspielen<small>{formatDuration((outFrame - inFrame) / fps)}</small></span></button><button onClick={() => setOutFrame(Math.max(currentFrame, inFrame + 1))}><b>O</b><span>OUT setzen<small>{frameTime(outFrame, fps)} · F{outFrame}</small></span></button></div>
             </div>
-            <section className="assign-panel"><div><span className="field-label">Loch</span><select value={hole} onChange={(event) => setHole(Number(event.target.value))}>{Array.from({ length: project.settings.holes }, (_, index) => <option value={index + 1} key={index}>Loch {index + 1}</option>)}</select></div><div><span className="field-label">Spieler</span><select value={playerId} onChange={(event) => setPlayerId(event.target.value)}>{project.settings.players.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select></div><div><span className="field-label">Block</span><select value={targetBlock?.id ?? ''} onChange={(event) => setTargetBlockId(event.target.value)}>{availableBlocks.map((block) => <option value={block.id} key={block.id}>{block.label}</option>)}</select></div><button className="primary assign-button" onClick={saveSequence}><Scissors size={16} /> {editingId ? 'Änderungen speichern' : 'Sequenz zuweisen'}</button>{editingId && <button className="icon-button" title="Bearbeitung abbrechen" onClick={resetMarks}><X size={17} /></button>}</section>
+            <section className="assign-panel"><div><span className="field-label">Loch</span><select value={hole} onChange={(event) => { setHole(Number(event.target.value)); setTargetBlockId(''); }}>{Array.from({ length: project.settings.holes }, (_, index) => <option value={index + 1} key={index}>Loch {index + 1}</option>)}</select></div><div><span className="field-label">Spieler</span><select value={playerId} onChange={(event) => { setPlayerId(event.target.value); setTargetBlockId(''); }}>{project.settings.players.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select></div><div><span className="field-label">Schlag / Inhalt</span><select value={blockType} onChange={(event) => { setBlockType(event.target.value as BlockType); setTargetBlockId(''); }}>{BLOCK_TYPES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></div><button className="primary assign-button" onClick={saveSequence}><Scissors size={16} /> {editingId ? 'Änderungen speichern' : sourceType === 'group' ? `${selectionCameraCount} Kameras zuweisen` : 'Sequenz zuweisen'}</button>{editingId && <button className="icon-button" title="Bearbeitung abbrechen" onClick={resetMarks}><X size={17} /></button>}</section>
             {message && <div className="inline-message review-message">{message}</div>}
             <AssignedSequences project={project} sequences={sourceSequences} onEdit={editSequence} onDelete={(id) => setProject(removeSequence(project, id))} />
         </> : <div className="empty-review"><Scissors size={42} /><h2>{sourceType === 'media' ? 'Noch keine Medien importiert' : 'Noch keine Multicam-Gruppe angelegt'}</h2><p>Wechsle zum Import und füge Rohmaterial hinzu.</p></div>}</div>
@@ -427,7 +562,7 @@ function AssignedSequences({ project, sequences, onEdit, onDelete }: { project: 
     return <section className="assigned"><div className="assigned-heading"><h3>Zugewiesene Bereiche</h3><span>Farbig auf der Filmleiste markiert · zum Korrigieren öffnen</span></div>{sequences.length ? <div className="assigned-list">{sequences.sort((left, right) => left.inFrame - right.inFrame).map((sequence) => {
         const block = project.blocks.find((item) => item.id === sequence.targetBlockId);
         const player = project.settings.players.find((item) => item.id === block?.playerId);
-        return <article key={sequence.id}><button className="sequence-open" onClick={() => onEdit(sequence)}><span className="sequence-number">{block?.hole ?? '?'}</span><span><b>Loch {block?.hole} · {player?.name} · {block ? blockLabel(block.type) : 'Unbekannter Block'}</b><small>{frameTime(sequence.inFrame, sequence.sourceFps)} – {frameTime(sequence.outFrame, sequence.sourceFps)} · {sequence.outFrame - sequence.inFrame} Frames</small></span></button><button className="delete-sequence" title="Sequenz löschen" onClick={() => onDelete(sequence.id)}><Trash2 size={16} /></button></article>;
+        return <article key={sequence.id}><button className="sequence-open" onClick={() => onEdit(sequence)}><span className="sequence-number">{block?.hole ?? '?'}</span><span><b>Loch {block?.hole} · {player?.name} · {block ? blockLabel(block.type) : 'Unbekannter Block'}</b><small>{frameTime(sequence.inFrame, sequence.sourceFps)} – {frameTime(sequence.outFrame, sequence.sourceFps)} · {sequence.outFrame - sequence.inFrame} Frames{sequence.multicamAngles?.length ? ` · ${sequence.multicamAngles.length} Kameras` : ''}</small></span></button><button className="delete-sequence" title="Sequenz löschen" onClick={() => onDelete(sequence.id)}><Trash2 size={16} /></button></article>;
     })}</div> : <div className="assigned-empty">Setze In und Out und weise den ersten Bereich einem Golfblock zu.</div>}</section>;
 }
 
@@ -435,22 +570,53 @@ const nullableNumber = (value: string): number | null => value === '' ? null : N
 
 function ScorecardEditor({ project, setProject, onClose }: { project: GolfProject; setProject: (project: GolfProject) => void; onClose: () => void }) {
     const [message, setMessage] = useState('');
+    const [analysis, setAnalysis] = useState<ScorecardChooseResult | null>(null);
+    const [selectedTeeId, setSelectedTeeId] = useState('');
+    const [analyzing, setAnalyzing] = useState(false);
     const chooseScorecard = async () => {
         if (!window.golfStudio) return setMessage('Dateiauswahl ist nur in der Desktop-App verfügbar.');
+        setAnalyzing(true);
+        setMessage('Scorecard wird lokal analysiert …');
         try {
-            const result = await window.golfStudio.chooseScorecard();
-            if (!result.canceled && result.path) setProject(setScorecardSource(project, result.path));
-        } catch (error) { setMessage(error instanceof Error ? error.message : 'Scorecard konnte nicht ausgewählt werden.'); }
+            const result = await window.golfStudio.chooseScorecard(project.settings.holes);
+            if (result.canceled || !result.path) return setMessage('Keine Scorecard ausgewählt.');
+            setAnalysis(result);
+            setSelectedTeeId(result.tees[0]?.id ?? '');
+            if (result.status === 'ready') {
+                setMessage(`${result.tees[0]?.holes.length ?? 0} Löcher und ${result.tees.length} Abschläge erkannt. Bitte Abschlag prüfen und übernehmen.`);
+            } else {
+                setProject(setScorecardSource(project, result.path));
+                setMessage(result.warnings[0] ?? 'Diese Scorecard muss manuell übertragen werden.');
+            }
+        } catch (error) { setMessage(error instanceof Error ? error.message : 'Scorecard konnte nicht analysiert werden.'); }
+        finally { setAnalyzing(false); }
     };
-    const sourceName = project.courseData.scorecardSourcePath?.split(/[\\/]/).pop();
+    const selectedTee = analysis?.tees.find((tee) => tee.id === selectedTeeId);
+    const sourcePath = analysis?.path ?? project.courseData.scorecardSourcePath;
+    const sourceName = sourcePath?.split(/[\\/]/).pop();
+    const isImage = Boolean(sourcePath && /\.(png|jpe?g|webp)$/i.test(sourcePath));
+    const applyRecognizedData = () => {
+        if (!selectedTee || !analysis?.path) return;
+        const updated = applyScorecardTee(project, analysis.path, selectedTee);
+        if (updated === project) return setMessage('Die erkannten Lochdaten sind nicht vollständig und wurden nicht übernommen.');
+        setProject(updated);
+        setMessage(`${selectedTee.holes.length} Löcher · Abschlag ${selectedTee.label} übernommen.`);
+        setAnalysis(null);
+    };
     return <div className="data-editor-backdrop"><section className="scorecard-editor"><header><div><div className="eyebrow"><span /> PLATZDATEN</div><h2>Scorecard · {project.settings.course}</h2><p>Diese Daten speisen Loch-, Score- und Leaderboard-Grafiken.</p></div><button className="preview-close" onClick={onClose}><X size={18} /></button></header>
-        <div className="scorecard-source"><div><ClipboardList size={20} /><span><b>{sourceName ?? 'Keine Scorecard hinterlegt'}</b><small>{sourceName ? 'Lokal mit diesem Projekt verknüpft' : 'PDF oder Foto als Referenz auswählen'}</small></span></div><button className="secondary" onClick={chooseScorecard}><ImageUp size={15} /> Scorecard auswählen</button></div>
+        <div className="scorecard-source"><div><ClipboardList size={20} /><span><b>{sourceName ?? 'Keine Scorecard hinterlegt'}</b><small>{sourceName ? 'Bleibt lokal auf diesem Rechner' : 'PDF oder Foto als Referenz auswählen'}</small></span></div><button className="secondary" disabled={analyzing} onClick={chooseScorecard}><ImageUp size={15} /> {analyzing ? 'Analysiere …' : 'Scorecard auswählen'}</button></div>
         {message && <div className="inline-message">{message}</div>}
+        {analysis?.status === 'ready' && selectedTee && <section className="scorecard-analysis"><div className="scorecard-analysis-heading"><div><span>LOKAL ERKANNT</span><h3>Welchen Abschlag habt ihr gespielt?</h3><p>Wähle einen Abschlag und prüfe die Werte. Erst der grüne Button übernimmt sie ins Projekt.</p></div><ShieldCheck size={25} /></div><div className="scorecard-tee-options">{analysis.tees.map((tee) => {
+            const totalMeters = tee.holes.reduce((sum, hole) => sum + hole.lengthMeters, 0);
+            const totalPar = tee.holes.reduce((sum, hole) => sum + hole.par, 0);
+            return <button className={tee.id === selectedTeeId ? 'active' : ''} onClick={() => setSelectedTeeId(tee.id)} key={tee.id}><b>{tee.label}</b><small>{totalMeters.toLocaleString('de-DE')} m · Par {totalPar}</small></button>;
+        })}</div><div className="scorecard-analysis-preview">{selectedTee.holes.map((hole) => <span key={hole.number}><b>{hole.number}</b><small>Par {hole.par}</small><em>{hole.lengthMeters} m</em></span>)}</div><button className="primary scorecard-apply" onClick={applyRecognizedData}><Check size={16} /> Abschlag {selectedTee.label} und {selectedTee.holes.length} Löcher übernehmen</button></section>}
+        {analysis?.status === 'manual' && isImage && sourcePath && <div className="scorecard-reference-preview"><img src={fileUrl(sourcePath)} alt="Ausgewählte Scorecard" /><p>Foto bereit zur manuellen Übertragung. Eine automatische Fotoerkennung ist noch nicht aktiv.</p></div>}
         <div className="scorecard-table" style={{ gridTemplateColumns: `55px 85px 100px 75px 110px repeat(${project.settings.players.length}, minmax(95px, 1fr))` }}><div className="scorecard-head"><span>LOCH</span><span>PAR</span><span>LÄNGE (M)</span><span>HCP</span><span>ABSCHLAG</span>{project.settings.players.map((player) => <span key={player.id}>SCORE {player.name.toUpperCase()}</span>)}</div>{project.courseData.holes.map((hole) => <div className="scorecard-row" key={hole.number}><b>{hole.number}</b><select value={hole.par} onChange={(event) => setProject(updateHoleData(project, hole.number, { par: Number(event.target.value) }))}>{[3, 4, 5, 6].map((par) => <option value={par} key={par}>Par {par}</option>)}</select><input type="number" min={0} value={hole.lengthMeters ?? ''} placeholder="–" onChange={(event) => setProject(updateHoleData(project, hole.number, { lengthMeters: nullableNumber(event.target.value) }))} /><input type="number" min={1} max={project.settings.holes} value={hole.strokeIndex ?? ''} placeholder="–" onChange={(event) => setProject(updateHoleData(project, hole.number, { strokeIndex: nullableNumber(event.target.value) }))} /><input value={hole.teeColor} placeholder="z. B. Gelb" onChange={(event) => setProject(updateHoleData(project, hole.number, { teeColor: event.target.value }))} />{project.settings.players.map((player) => {
             const score = project.playerScores.find((item) => item.hole === hole.number && item.playerId === player.id);
             return <input type="number" min={1} value={score?.strokes ?? ''} placeholder="–" aria-label={`Score ${player.name} Loch ${hole.number}`} onChange={(event) => setProject(updatePlayerScore(project, hole.number, player.id, nullableNumber(event.target.value)))} key={player.id} />;
         })}</div>)}</div>
-        <footer><p>Die Datei dient aktuell als lokale Referenz. Automatisches Auslesen mit Kontrollansicht folgt separat.</p><button className="primary" onClick={onClose}><Check size={15} /> Fertig</button></footer>
+        <footer><p>PDF-Werte werden nur nach deiner Bestätigung übernommen. Fotos bleiben vorerst eine manuelle Vorlage.</p><button className="primary" onClick={onClose}><Check size={15} /> Fertig</button></footer>
     </section></div>;
 }
 
@@ -488,7 +654,7 @@ function shotTracerPath(points: ShotTracerPoint[], smoothing: number): string {
     return path;
 }
 
-function ShotTracerLayer({ tracer, frame, editing, marking, tracking, candidates, cameraMarkers, videoRef, sequence, onMark, onPoint, onCandidate, onCursor }: {
+function ShotTracerLayer({ tracer, frame, editing, marking, tracking, candidates, cameraMarkers, videoRef, sequence, mediaRange, onMark, onPoint, onCandidate, onCursor }: {
     tracer?: ShotTracerEffect;
     frame: number;
     editing: boolean;
@@ -498,6 +664,7 @@ function ShotTracerLayer({ tracer, frame, editing, marking, tracking, candidates
     cameraMarkers: { x: number; y: number; label: string }[];
     videoRef: React.RefObject<HTMLVideoElement | null>;
     sequence: VirtualSequence;
+    mediaRange?: MulticamAngle;
     onMark: (x: number, y: number) => void;
     onPoint: (index: number, x: number, y: number) => void;
     onCandidate: (candidate: BallCandidate) => void;
@@ -516,8 +683,8 @@ function ShotTracerLayer({ tracer, frame, editing, marking, tracking, candidates
         let animationFrameHandle: number | undefined;
         let stopped = false;
         const paint = (mediaTime: number) => {
-            const sourceFrame = mediaTime * sequence.sourceFps;
-            const relativeFrame = Math.max(0, sourceFrame - sequence.inFrame);
+            const mediaStart = mediaRange ? mediaRange.inFrame / mediaRange.sourceFps : sequence.inFrame / sequence.sourceFps;
+            const relativeFrame = Math.max(0, (mediaTime - mediaStart) * sequence.sourceFps);
             const visual = tracerVisualState(tracer, relativeFrame);
             motionGroupRef.current?.setAttribute('transform', svgCameraMatrix(tracer.cameraLock, relativeFrame) ?? '');
             const tail = (tracer.tailLength ?? .16) * 100;
@@ -556,7 +723,7 @@ function ShotTracerLayer({ tracer, frame, editing, marking, tracking, candidates
             if (videoFrameHandle !== undefined) video.cancelVideoFrameCallback?.(videoFrameHandle);
             if (animationFrameHandle !== undefined) cancelAnimationFrame(animationFrameHandle);
         };
-    }, [tracer, sequence, videoRef]);
+    }, [mediaRange, tracer, sequence, videoRef]);
     if (!tracer) return <svg className="shot-tracer-layer" aria-hidden="true" />;
     const visual = tracerVisualState(tracer, frame);
     const path = shotTracerPath(tracer.points, tracer.smoothing);
@@ -772,11 +939,8 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         const block = project.blocks.find((item) => item.id === sequence.targetBlockId);
         if (!block) return [];
         const player = project.settings.players.find((item) => item.id === block.playerId);
-        const media = sequence.sourceType === 'media'
-            ? project.media.find((item) => item.id === sequence.sourceId)
-            : project.media.find((item) => project.groups.find((group) => group.id === sequence.sourceId)?.mediaIds.includes(item.id) && item.kind === 'video')
-                ?? project.media.find((item) => project.groups.find((group) => group.id === sequence.sourceId)?.mediaIds.includes(item.id));
-        return media ? [{ sequence, block, player, media }] : [];
+        const playback = sequencePlaybackSource(project, sequence);
+        return playback ? [{ sequence, block, player, ...playback }] : [];
     }), [project, sequenceIds]);
     const [index, setIndex] = useState(0);
     const [playing, setPlaying] = useState(true);
@@ -820,7 +984,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         const duration = (current.sequence.outFrame - current.sequence.inFrame) / current.sequence.sourceFps;
         const audioFade = Math.min(duration / 2, EDITORIAL_STYLE.audioFadeFrames / current.sequence.sourceFps);
         const paint = (sourceTime: number) => {
-            const relative = Math.max(0, sourceTime - current.sequence.inFrame / current.sequence.sourceFps);
+            const relative = Math.max(0, sourceTime - current.range.inFrame / current.range.sourceFps);
             const remaining = Math.max(0, duration - relative);
             const fadeIn = transitionIn?.kind === 'hole-change' ? Math.max(0, 1 - relative / Math.max(.001, transitionIn.dipSeconds)) : 0;
             const fadeOut = transitionOut?.kind === 'hole-change' ? Math.max(0, 1 - remaining / Math.max(.001, transitionOut.dipSeconds)) : 0;
@@ -853,12 +1017,12 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
             if (videoFrameHandle !== undefined) videoRef.current?.cancelVideoFrameCallback?.(videoFrameHandle);
             if (animationHandle !== undefined) cancelAnimationFrame(animationHandle);
         };
-    }, [current?.sequence.id, transitionIn?.kind, transitionOut?.kind, holeTitleIndex]);
+    }, [current?.sequence.id, current?.media.id, transitionIn?.kind, transitionOut?.kind, holeTitleIndex]);
     const startCurrent = () => {
         if (!current) return;
         const element = mediaElement();
         if (!element) return;
-        element.currentTime = current.sequence.inFrame / current.sequence.sourceFps + pendingOffset.current;
+        element.currentTime = current.range.inFrame / current.range.sourceFps + pendingOffset.current;
         pendingOffset.current = 0;
         if (playing) void element.play().catch(() => setPlaying(false));
     };
@@ -897,7 +1061,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
             if (remaining <= durations[itemIndex] || itemIndex === durations.length - 1) {
                 if (itemIndex === index) {
                     const item = items[itemIndex];
-                    if (item && mediaElement()) mediaElement()!.currentTime = item.sequence.inFrame / item.sequence.sourceFps + remaining;
+                    if (item && mediaElement()) mediaElement()!.currentTime = item.range.inFrame / item.range.sourceFps + remaining;
                     setLocalFrame(Math.round(remaining * (item?.sequence.sourceFps ?? 1)));
                 } else goTo(itemIndex, remaining);
                 return;
@@ -910,7 +1074,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         const duration = current.sequence.outFrame - current.sequence.inFrame;
         const target = Math.min(duration - 1, Math.max(0, Math.round(frame)));
         const element = mediaElement();
-        if (element) element.currentTime = (current.sequence.inFrame + target) / current.sequence.sourceFps;
+        if (element) element.currentTime = current.range.inFrame / current.range.sourceFps + target / current.sequence.sourceFps;
         setLocalFrame(target);
         setPlaying(false);
         element?.pause();
@@ -931,7 +1095,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         setBallCandidates([]);
         setDetectionStatus(trackingPoints?.length ? 'Kleiner Bereich um den letzten Punkt wird lokal analysiert …' : 'Mehrere Frames werden lokal verglichen …');
         try {
-            await seekVideoForAnalysis(videoRef.current, (current.sequence.inFrame + targetFrame) / current.sequence.sourceFps);
+            await seekVideoForAnalysis(videoRef.current, current.range.inFrame / current.range.sourceFps + targetFrame / current.sequence.sourceFps);
             setLocalFrame(targetFrame);
             const stage = videoRef.current.closest('.preview-stage') as HTMLElement | null;
             const focus = stage && trackingPoints?.length ? { ...stagePointToVideo(trackingPoints.at(-1)!, videoRef.current, stage), radius: trackingPoints.length > 1 ? .28 : .22 } : undefined;
@@ -1059,7 +1223,9 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         if (!current || !currentTracer) return;
         const impact = currentTracer.points.find((point) => point.kind === 'impact')?.frame ?? currentTracer.impactFrame ?? 0;
         if (localFrame <= impact) { setDetectionStatus('Der Landeframe muss nach dem Impact liegen.'); return; }
-        setProject(updateShotTracer(project, current.sequence.id, { endFrame: localFrame, disappearFrame: localFrame }));
+        const duration = current.sequence.outFrame - current.sequence.inFrame;
+        const disappearFrame = Math.min(duration, localFrame + Math.round(current.sequence.sourceFps * 1.25));
+        setProject(updateShotTracer(project, current.sequence.id, { endFrame: localFrame, disappearFrame }));
         setTracerWorkflowStep('landing-point');
         setMarkingBall(true);
         setDetectionStatus(`Landeframe ${localFrame} gespeichert. Landepunkt im Bild anklicken.`);
@@ -1096,7 +1262,9 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
             const impactPoint = currentTracer.points.find((point) => point.kind === 'impact') ?? currentTracer.points[0];
             if (!impactPoint || localFrame <= impactPoint.frame) return setDetectionStatus('Ungültiger Landeframe.');
             const points = createTracerFlight(impactPoint, localFrame, x, y);
-            setProject(updateShotTracer(project, current.sequence.id, { points, impactFrame: impactPoint.frame, endFrame: localFrame, disappearFrame: localFrame, occlusionStartFrame: null, occlusionEndFrame: null }));
+            const duration = current.sequence.outFrame - current.sequence.inFrame;
+            const disappearFrame = Math.min(duration, localFrame + Math.round(current.sequence.sourceFps * 1.25));
+            setProject(updateShotTracer(project, current.sequence.id, { points, impactFrame: impactPoint.frame, endFrame: localFrame, disappearFrame, occlusionStartFrame: null, occlusionEndFrame: null }));
             setTracerWorkflowStep('edit');
             setMarkingBall(false);
             setTrackingCursor(undefined);
@@ -1117,7 +1285,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         setMarkingBall(false);
         setTrackingCursor(undefined);
         setBallCandidates([]);
-        setDetectionStatus('Tracer gespeichert. Landeframe bestimmt jetzt exakt das Ende.');
+        setDetectionStatus('Tracer gespeichert. Die Flugbahn folgt den echten Timing-Punkten und blendet nach der Landung weich aus.');
     };
     const startCameraLock = () => {
         if (!current || !currentTracer) return;
@@ -1210,6 +1378,12 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         window.addEventListener('keydown', keydown, true);
         return () => window.removeEventListener('keydown', keydown, true);
     }, [tracerEditing, manualTracking, landingMode, landingOcclusion, localFrame, ballCandidates, currentTracer, project]);
+    const switchCamera = (mediaId: string) => {
+        if (!current || current.sequence.sourceType !== 'group' || current.media.id === mediaId) return;
+        pendingOffset.current = localFrame / current.sequence.sourceFps;
+        mediaElement()?.pause();
+        setProject(setSequenceActiveMedia(project, current.sequence.id, mediaId));
+    };
     if (!current) return <div className="preview-backdrop"><section className="rough-preview empty"><button className="preview-close" onClick={onClose}><X size={18} /></button><MonitorPlay size={44} /><h2>Noch kein Rohschnitt vorhanden</h2><p>Weise zuerst mindestens eine Sequenz einem Golfblock zu.</p></section></div>;
     const holeData = project.courseData.holes.find((hole) => hole.number === current.block.hole);
     const scoreText = current.player ? scoreBeforeHole(project, current.player.id, current.block.hole) : 'E';
@@ -1220,17 +1394,17 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
     return <div className="preview-backdrop"><section className="rough-preview">
         <header className="preview-header"><div><div className="eyebrow"><span /> ROHSCHNITT-VORSCHAU</div><h2>{onlyHole ? `Loch ${onlyHole}` : 'Komplette Runde'}</h2></div><div className="preview-now"><span>JETZT</span><b>Loch {current.block.hole} · {current.player?.name} · {current.block.label}</b></div><button className="preview-close" onClick={onClose}><X size={18} /></button></header>
         <div className="preview-body"><div className="preview-player"><div className="preview-stage">
-            {current.media.kind === 'video' ? <video key={current.sequence.id} ref={videoRef} src={fileUrl(current.media.path)} onLoadedMetadata={startCurrent} onTimeUpdate={(event) => {
-                const sourceFrame = Math.round(event.currentTarget.currentTime * current.sequence.sourceFps);
-                const relative = Math.max(0, sourceFrame - current.sequence.inFrame);
+            {current.media.kind === 'video' ? <video key={`${current.sequence.id}:${current.media.id}`} ref={videoRef} src={fileUrl(current.media.path)} onLoadedMetadata={startCurrent} onTimeUpdate={(event) => {
+                const relativeSeconds = Math.max(0, event.currentTarget.currentTime - current.range.inFrame / current.range.sourceFps);
+                const relative = Math.round(relativeSeconds * current.sequence.sourceFps);
                 setLocalFrame(relative);
-                if (sourceFrame >= current.sequence.outFrame) advance();
+                if (event.currentTarget.currentTime >= current.range.outFrame / current.range.sourceFps) advance();
             }} onEnded={advance} /> : <div className="preview-audio"><FileAudio size={64} /><b>{current.media.name}</b><audio key={current.sequence.id} ref={audioRef} src={fileUrl(current.media.path)} onLoadedMetadata={startCurrent} onTimeUpdate={(event) => {
-                const sourceFrame = Math.round(event.currentTarget.currentTime * current.sequence.sourceFps);
-                setLocalFrame(Math.max(0, sourceFrame - current.sequence.inFrame));
-                if (sourceFrame >= current.sequence.outFrame) advance();
+                const relativeSeconds = Math.max(0, event.currentTarget.currentTime - current.range.inFrame / current.range.sourceFps);
+                setLocalFrame(Math.round(relativeSeconds * current.sequence.sourceFps));
+                if (event.currentTarget.currentTime >= current.range.outFrame / current.range.sourceFps) advance();
             }} onEnded={advance} /></div>}
-            <ShotTracerLayer tracer={activeTracer} frame={localFrame} editing={tracerEditing} marking={markingBall} tracking={Boolean(tracerWorkflowStep || cameraLockStep)} candidates={[]} cameraMarkers={cameraMarkers} videoRef={videoRef} sequence={current.sequence} onMark={(x, y) => cameraLockStep ? handleCameraLockPoint(x, y) : handleTracerWorkflowPoint(x, y)} onCandidate={() => undefined} onCursor={setTrackingCursor} onPoint={(pointIndex, x, y) => {
+            <ShotTracerLayer tracer={activeTracer} frame={localFrame} editing={tracerEditing} marking={markingBall} tracking={Boolean(tracerWorkflowStep || cameraLockStep)} candidates={[]} cameraMarkers={cameraMarkers} videoRef={videoRef} sequence={current.sequence} mediaRange={current.range} onMark={(x, y) => cameraLockStep ? handleCameraLockPoint(x, y) : handleTracerWorkflowPoint(x, y)} onCandidate={() => undefined} onCursor={setTrackingCursor} onPoint={(pointIndex, x, y) => {
                 if (!current || !activeTracer) return;
                 const worldPoint = screenToWorld(activeTracer.cameraLock, localFrame, { x, y });
                 setProject(updateShotTracer(project, current.sequence.id, { points: activeTracer.points.map((point, index) => index === pointIndex ? { ...point, ...worldPoint } : point) }));
@@ -1240,11 +1414,88 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
             <div ref={editorialFadeRef} className={`editorial-transition ${holeTitleItem ? 'show-card' : ''}`}><div className="hole-title-card"><span>{project.settings.course.toUpperCase()}</span><b>HOLE {holeTitleItem?.block.hole}</b><em>PAR {titleHoleData?.par ?? '–'}{titleHoleData?.lengthMeters ? ` · ${titleHoleData.lengthMeters} M` : ''}</em></div></div>
         </div><div className="preview-transport"><button onClick={() => goTo(index - 1)} disabled={index === 0}><SkipBack size={18} /></button><button className="preview-play" onClick={togglePlay}>{playing ? <Pause size={19} /> : <Play size={19} />}</button><button onClick={() => goTo(index + 1)} disabled={index === items.length - 1}><SkipForward size={18} /></button><strong>{formatDuration(position)} / {formatDuration(totalDuration)}</strong><span>Sequenz {index + 1} von {items.length}</span></div>
         <input className="rough-progress" type="range" min={0} max={Math.max(1, Math.round(totalDuration * 1000))} value={Math.round(position * 1000)} onChange={(event) => seekGlobal(Number(event.target.value) / 1000)} /></div>
-        <aside className="preview-inspector"><div className="inspector-section"><span className="field-label">Aktuelle Sequenz</span><h3>{current.media.name}</h3><p>{frameTime(current.sequence.inFrame, current.sequence.sourceFps)} – {frameTime(current.sequence.outFrame, current.sequence.sourceFps)}</p><button className="secondary edit-current" onClick={() => onEdit(current.sequence.id)}><Scissors size={14} /> Im Sichtungseditor öffnen</button></div>
+        <aside className="preview-inspector"><div className="inspector-section"><span className="field-label">Aktuelle Sequenz</span><h3>{current.media.name}</h3><p>{frameTime(current.range.inFrame, current.range.sourceFps)} – {frameTime(current.range.outFrame, current.range.sourceFps)}</p><button className="secondary edit-current" onClick={() => onEdit(current.sequence.id)}><Scissors size={14} /> Im Sichtungseditor öffnen</button></div>
+            {(current.sequence.multicamAngles?.length ?? 0) > 1 && <div className="inspector-section preview-angle-deck"><span className="field-label">Kameraperspektive</span><p>Wechselt denselben synchronisierten Schlag ohne neues Zuschneiden.</p><div>{current.sequence.multicamAngles!.map((angle, angleIndex) => {
+                const media = project.media.find((item) => item.id === angle.mediaId);
+                if (!media) return null;
+                return <button className={media.id === current.media.id ? 'active' : ''} onClick={() => switchCamera(media.id)} key={media.id}><span>{angleIndex + 1}</span><div><b>{media.device || `Kamera ${angleIndex + 1}`}</b><small>{media.name}</small></div>{media.id === current.media.id && <Check size={14} />}</button>;
+            })}</div></div>}
             <div className="inspector-section fixed-style-summary"><span className="field-label">Fester Editorial-Look</span><div><ShieldCheck size={17} /><span><b>Automatisch aktiv</b><small>Scorebug · Schlaginfo · Lochtrenner · Audio-Microfade</small></span></div><p>Innerhalb eines Lochs bleiben die Schnitte direkt. Beim Lochwechsel folgen Dip-to-Black und Lochkarte.</p></div>
             <ShotTracerControls project={project} sequence={current.sequence} tracer={currentTracer} frame={localFrame} editing={tracerEditing} workflowStep={tracerWorkflowStep} cameraLockStep={cameraLockStep} detectionStatus={detectionStatus} setProject={setProject} onEdit={(value) => { setTracerEditing(value); if (!value) { setTracerWorkflowStep(undefined); setCameraLockStep(undefined); setTrackingCursor(undefined); } setMarkingBall(false); setBallCandidates([]); if (value) { setPlaying(false); mediaElement()?.pause(); } }} onStart={startTracerWorkflow} onConfirmImpactFrame={confirmImpactFrame} onConfirmLandingFrame={confirmLandingFrame} onBeginIntermediate={beginIntermediatePoint} onConfirmIntermediateFrame={confirmIntermediateFrame} onFinish={finishTracerWorkflow} onStartCameraLock={startCameraLock} onClearCameraLock={clearCameraLock} onSeekFrame={seekLocalFrame} />
         </aside></div>
     </section></div>;
+}
+
+const ROUND_STATUS_COPY: Record<HoleStoryStatus, string> = {
+    empty: 'Noch offen',
+    started: 'Story angelegt',
+    'story-ready': 'Im Film',
+};
+
+function RoundDesk({ project, setProject, onNavigate, onOpenSequence, onStartHole }: { project: GolfProject; setProject: (project: GolfProject) => void; onNavigate: (screen: StudioScreen) => void; onOpenSequence: (sequenceId: string) => void; onStartHole: (hole: number) => void }) {
+    const [selectedHole, setSelectedHole] = useState<number>();
+    const [previewOpen, setPreviewOpen] = useState(false);
+    const backRef = useRef<HTMLButtonElement>(null);
+    const holeRefs = useRef(new Map<number, HTMLButtonElement>());
+    const summary = useMemo(() => summarizeRoundDesk(project), [project]);
+    const selected = selectedHole ? summary.holes.find((hole) => hole.hole === selectedHole) : undefined;
+    const blocks = selectedHole
+        ? project.blocks.filter((block) => block.hole === selectedHole).sort((left, right) => left.order - right.order)
+        : [];
+    const openFirstMoment = () => {
+        if (!selectedHole) return;
+        const sequenceId = firstSequenceForHole(project, selectedHole);
+        if (sequenceId) onOpenSequence(sequenceId);
+        else if (project.media.length) onStartHole(selectedHole);
+        else onNavigate('import');
+    };
+    useEffect(() => {
+        if (selectedHole) window.requestAnimationFrame(() => backRef.current?.focus());
+    }, [selectedHole]);
+    const backToRound = () => {
+        const previousHole = selectedHole;
+        setSelectedHole(undefined);
+        window.requestAnimationFrame(() => previousHole && holeRefs.current.get(previousHole)?.focus());
+    };
+    if (selected) {
+        const holeData = project.courseData.holes.find((hole) => hole.number === selected.hole);
+        return <section className="workspace round-desk hole-story-view">
+            <header className="hole-story-header">
+                <button ref={backRef} className="round-back" onClick={backToRound}><ChevronLeft size={16} /> Zurück zur Runde</button>
+                <div className="hole-story-kicker"><span>HOLE STORY</span><i />{ROUND_STATUS_COPY[selected.status]} <strong>ROUND CUT {summary.progress}%</strong></div>
+                <div className="hole-story-title"><div><span>{String(selected.hole).padStart(2, '0')}</span><small>PAR {selected.par}</small></div><div><h1>Die Geschichte<br />dieses Lochs.</h1><p>{holeData?.lengthMeters ? `${holeData.lengthMeters} Meter · ` : ''}{selected.sequenceCount} Momente · {formatDuration(selected.durationSeconds)} im Rohschnitt</p></div></div>
+                <button className="primary hole-story-action" onClick={openFirstMoment}>{selected.sequenceCount ? <><Play size={16} /> Ersten Moment öffnen</> : project.media.length ? <><Scissors size={16} /> Momente aus Material bauen</> : <><Import size={16} /> Material importieren</>}</button>
+            </header>
+            <div className="story-strip-heading"><div><span>STORY MOMENTS</span><h2>Vom Abschlag bis zum letzten Putt</h2></div><p>Keine starre Timeline: Jeder Moment gehört zu seiner Rolle in der Golfgeschichte.</p></div>
+            <div className="story-moment-strip">
+                {blocks.map((block, index) => {
+                    const sequences = block.sequenceIds.filter((id) => project.sequences.some((sequence) => sequence.id === id));
+                    return <article className={`story-moment ${sequences.length ? 'filled' : ''}`} key={block.id}>
+                        <span className="story-moment-index">{String(index + 1).padStart(2, '0')}</span>
+                        <div className="story-moment-line"><i /></div>
+                        <div><small>{project.settings.players.find((player) => player.id === block.playerId)?.name ?? 'Spieler'}</small><h3>{blockLabel(block.type)}</h3><p>{sequences.length ? `${sequences.length} ${sequences.length === 1 ? 'Aufnahme' : 'Aufnahmen'} bereit` : 'Noch ohne Aufnahme'}</p></div>
+                        {sequences.length ? <button onClick={() => onOpenSequence(sequences[0])} aria-label={`${blockLabel(block.type)} im Editor öffnen`}><ChevronRight size={16} /></button> : <span className="story-planned">GEPLANT</span>}
+                    </article>;
+                })}
+            </div>
+            <aside className="story-truth-note"><Sparkles size={16} /><div><b>Editorial Pass</b><p>Overlays, Shot-Tracer und Feinschnitt bleiben bewusst im vorhandenen Moment-Editor. Ein automatischer Story-Pass ist noch nicht verfügbar.</p></div></aside>
+        </section>;
+    }
+    return <section className="workspace round-desk">
+        <header className="round-desk-hero">
+            <div><div className="eyebrow"><span /> THE ROUND DESK</div><h1>Deine Runde.<br /><em>Als Film gedacht.</em></h1><p>Der komplette Golf-Film auf einen Blick. Wähle ein Loch, um seine Momente zu formen – nicht seine Spuren zu verwalten.</p></div>
+            <div className="round-reel" role="progressbar" aria-label="Fortschritt des Rundenfilms" aria-valuemin={0} aria-valuemax={100} aria-valuenow={summary.progress}><div><strong>{summary.progress}<small>%</small></strong><span>ROUND CUT</span></div><svg viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="52" /><circle className="progress" cx="60" cy="60" r="52" pathLength="100" strokeDasharray={`${summary.progress} 100`} /></svg></div>
+        </header>
+        <div className="round-desk-summary"><span><b>{summary.completedHoles}</b> Löcher im Film</span><span><b>{summary.sequenceCount}</b> Story-Momente</span><span><b>{formatDuration(summary.durationSeconds)}</b> Rohschnitt</span><button className="secondary" disabled={!summary.sequenceCount} onClick={() => setPreviewOpen(true)}><MonitorPlay size={15} /> Ganze Runde ansehen</button></div>
+        <div className="round-map-heading"><div><span>ROUND MAP · {project.settings.holes} HOLES</span><h2>{project.settings.course}</h2></div><div className="round-map-legend"><span><i className="ready" /> Im Film</span><span><i className="started" /> Angelegt</span><span><i /> Offen</span></div></div>
+        <div className={`round-map holes-${project.settings.holes}`}>
+            {summary.holes.map((hole, index) => <button ref={(element) => { if (element) holeRefs.current.set(hole.hole, element); else holeRefs.current.delete(hole.hole); }} className={`round-hole ${hole.status} route-${index % 5}`} onClick={() => setSelectedHole(hole.hole)} key={hole.hole} aria-label={`Loch ${hole.hole}, Par ${hole.par}, ${ROUND_STATUS_COPY[hole.status]}`}>
+                <span className="round-hole-route"><i /><i /></span><span className="round-hole-number">{String(hole.hole).padStart(2, '0')}</span><span className="round-hole-meta"><b>PAR {hole.par}</b><small>{hole.lengthMeters ? `${hole.lengthMeters} M` : ROUND_STATUS_COPY[hole.status]}</small></span>{hole.sequenceCount > 0 && <strong>{hole.sequenceCount}</strong>}
+            </button>)}
+        </div>
+        <footer className="round-desk-foot"><Flag size={15} /><span>{summary.activeHoles ? `${summary.activeHoles} Löcher erzählen bereits eine Geschichte.` : 'Die Runde ist angelegt. Importiere Material, um die erste Hole Story zu beginnen.'}</span></footer>
+        {previewOpen && <RoughCutPreview project={project} setProject={setProject} onClose={() => setPreviewOpen(false)} onEdit={(sequenceId) => { setPreviewOpen(false); onOpenSequence(sequenceId); }} />}
+    </section>;
 }
 
 function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfProject; setProject: (project: GolfProject) => void; onOpenSequence: (sequenceId: string) => void }) {
@@ -1264,7 +1515,7 @@ function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfPr
     const totalDuration = project.sequences.reduce((sum, sequence) => sum + (sequence.outFrame - sequence.inFrame) / sequence.sourceFps, 0);
     const sourceName = (sequence: VirtualSequence) => sequence.sourceType === 'media'
         ? project.media.find((media) => media.id === sequence.sourceId)?.name ?? 'Fehlender Clip'
-        : project.groups.find((group) => group.id === sequence.sourceId)?.name ?? 'Fehlende Multicam-Gruppe';
+        : `${project.media.find((media) => media.id === sequence.activeMediaId)?.name ?? project.groups.find((group) => group.id === sequence.sourceId)?.name ?? 'Fehlende Multicam-Gruppe'}${sequence.multicamAngles?.length ? ` · ${sequence.multicamAngles.length} Kameras` : ''}`;
     const removeBlock = (blockId: string, sequenceCount: number) => {
         if (sequenceCount && !window.confirm(`Dieser Block enthält ${sequenceCount} Sequenz${sequenceCount === 1 ? '' : 'en'}. Block und Sequenzen wirklich löschen?`)) return;
         setProject(deleteBlock(project, blockId));
@@ -1375,10 +1626,12 @@ function ExportScreen({ project }: { project: GolfProject }) {
 
 function Studio({ initialProject, onNew, mediaEngineStatus, onRetryMediaEngine }: { initialProject: GolfProject; onNew: () => void; mediaEngineStatus: MediaEngineStatus | null; onRetryMediaEngine: () => void }) {
     const [project, setProject] = useState(initialProject);
-    const [screen, setScreen] = useState<StudioScreen>('import');
+    const [screen, setScreen] = useState<StudioScreen>('round');
     const [initialMediaId, setInitialMediaId] = useState<string>();
     const [initialSequenceId, setInitialSequenceId] = useState<string>();
+    const [initialHole, setInitialHole] = useState<number>();
     const [saveState, setSaveState] = useState('Projekt lokal');
+    const [dashboardOpen, setDashboardOpen] = useState(false);
     const save = async () => {
         if (!window.golfStudio) return setSaveState('Speichern nur in der Desktop-App verfügbar');
         try {
@@ -1386,16 +1639,19 @@ function Studio({ initialProject, onNew, mediaEngineStatus, onRetryMediaEngine }
             setSaveState(result.canceled ? 'Speichern abgebrochen' : 'Projekt gespeichert');
         } catch (error) { setSaveState(error instanceof Error ? error.message : 'Speichern fehlgeschlagen'); }
     };
-    const goReview = (mediaId?: string) => { setInitialMediaId(mediaId); setInitialSequenceId(undefined); setScreen('review'); };
-    const openSequence = (sequenceId: string) => { setInitialSequenceId(sequenceId); setInitialMediaId(undefined); setScreen('review'); };
+    const goReview = (mediaId?: string) => { setInitialMediaId(mediaId); setInitialSequenceId(undefined); setInitialHole(undefined); setScreen('review'); };
+    const openSequence = (sequenceId: string) => { setInitialSequenceId(sequenceId); setInitialMediaId(undefined); setInitialHole(undefined); setScreen('review'); };
+    const startHoleReview = (hole: number) => { setInitialSequenceId(undefined); setInitialMediaId(undefined); setInitialHole(hole); setScreen('review'); };
     const navigate = (next: StudioScreen) => {
-        if (next === 'review') { setInitialMediaId(undefined); setInitialSequenceId(undefined); }
+        if (next === 'review') { setInitialMediaId(undefined); setInitialSequenceId(undefined); setInitialHole(undefined); }
         setScreen(next);
     };
-    const content = screen === 'import'
-        ? <ImportScreen project={project} setProject={setProject} onReview={goReview} />
+    const content = screen === 'round'
+        ? <RoundDesk project={project} setProject={setProject} onNavigate={navigate} onOpenSequence={openSequence} onStartHole={startHoleReview} />
+        : screen === 'import'
+            ? <ImportScreen project={project} setProject={setProject} onReview={goReview} />
         : screen === 'review'
-            ? <ReviewScreen key={initialSequenceId ?? initialMediaId ?? 'review'} project={project} setProject={setProject} initialMediaId={initialMediaId} initialSequenceId={initialSequenceId} />
+            ? <ReviewScreen key={initialSequenceId ?? initialMediaId ?? (initialHole ? `hole-${initialHole}` : 'review')} project={project} setProject={setProject} initialMediaId={initialMediaId} initialSequenceId={initialSequenceId} initialHole={initialHole} />
             : screen === 'build'
                 ? <RoundBuilder project={project} setProject={setProject} onOpenSequence={openSequence} />
                 : <ExportScreen project={project} />;
@@ -1403,11 +1659,13 @@ function Studio({ initialProject, onNew, mediaEngineStatus, onRetryMediaEngine }
     const engineLabel = mediaEngineStatus?.ready
         ? `Media Engine · FFmpeg ${mediaEngineStatus.ffmpeg.version}`
         : mediaEngineStatus ? 'Media Engine nicht verfügbar' : 'Media Engine wird geprüft';
-    return <main className="studio-shell"><TopBar screen={screen} onScreen={navigate} onSave={save} /><Sidebar project={project} screen={screen} onScreen={navigate} onNew={onNew} />{content}<footer className="statusbar"><span><span className="status-dot" /> {saveState}</span><span className={mediaEngineStatus && !mediaEngineStatus.ready ? 'engine-error' : ''}><span className="status-dot" /> {engineLabel}{mediaEngineStatus && !mediaEngineStatus.ready && <button type="button" onClick={onRetryMediaEngine}>Erneut prüfen</button>}</span><span><HardDrive size={13} /> Lokal · {platformLabel}</span></footer></main>;
+    if (dashboardOpen) return <Dashboard onClose={() => setDashboardOpen(false)} />;
+    return <main className="studio-shell"><TopBar project={project} screen={screen} onScreen={navigate} onSave={save} onDashboard={() => setDashboardOpen(true)} /><Sidebar project={project} screen={screen} onScreen={navigate} onNew={onNew} />{content}<footer className="statusbar"><span><span className="status-dot" /> {saveState}</span><span className={mediaEngineStatus && !mediaEngineStatus.ready ? 'engine-error' : ''}><span className="status-dot" /> {engineLabel}{mediaEngineStatus && !mediaEngineStatus.ready && <button type="button" onClick={onRetryMediaEngine}>Erneut prüfen</button>}</span><span><HardDrive size={13} /> Lokal · {platformLabel}</span></footer></main>;
 }
 
 export default function App() {
     const [project, setProject] = useState<GolfProject | null>(null);
+    const [dashboardOpen, setDashboardOpen] = useState(false);
     const [error, setError] = useState('');
     const [mediaEngineStatus, setMediaEngineStatus] = useState<MediaEngineStatus | null>(null);
     const checkMediaEngine = useCallback((force = false) => {
@@ -1427,7 +1685,8 @@ export default function App() {
             if (!result.canceled && result.project) setProject(normalizeProject(result.project));
         } catch (reason) { setError(reason instanceof Error ? reason.message : 'Projekt konnte nicht geöffnet werden.'); }
     };
+    if (dashboardOpen) return <Dashboard onClose={() => setDashboardOpen(false)} />;
     return project
         ? <Studio initialProject={project} onNew={() => setProject(null)} mediaEngineStatus={mediaEngineStatus} onRetryMediaEngine={() => checkMediaEngine(true)} />
-        : <SetupScreen error={error} onOpen={open} onCreate={(settings) => setProject(createProject(settings))} mediaEngineStatus={mediaEngineStatus} onRetryMediaEngine={() => checkMediaEngine(true)} />;
+        : <SetupScreen error={error} onOpen={open} onDashboard={() => setDashboardOpen(true)} onCreate={(settings) => setProject(createProject(settings))} mediaEngineStatus={mediaEngineStatus} onRetryMediaEngine={() => checkMediaEngine(true)} />;
 }

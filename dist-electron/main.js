@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -7,8 +7,12 @@ import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import ffmpegStatic from 'ffmpeg-static';
-import { assertMediaFilesAreReadable, IpcValidationError, isTrustedAppUrl, validateExportRequest, validateProbePaths, validateProject } from './ipc-validation.js';
+import { assertMediaFilesAreReadable, IpcValidationError, isTrustedAppUrl, validateExportRequest, validateMulticamSyncRequest, validateProbePaths, validateProject } from './ipc-validation.js';
 import { createMediaChooseHandler, createMediaEngineDiagnostics, MediaEngineError, publicMediaEngineStatus, resolveMediaEnginePaths, validateDiagnosticsForce } from './media-engine.js';
+import { exportMediaForSequence, exportRangeForSequence } from './multicam-export.js';
+import { alignAudioTracks, compactWaveform, pcm16Envelope } from './audio-sync.js';
+import { tracerFrameAtProgress } from './tracer-timing.js';
+import { analyzeScorecard } from './scorecard-analysis.js';
 const execFileAsync = promisify(execFile);
 const mediaExtensions = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mkv', '.wav', '.mp3', '.m4a', '.aac', '.flac']);
 const audioExtensions = new Set(['.wav', '.mp3', '.m4a', '.aac', '.flac']);
@@ -115,12 +119,57 @@ async function probePaths(paths) {
     return results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
 }
 
-function exportMediaForSequence(project, sequence) {
-    if (sequence.sourceType === 'media')
-        return project.media.find((media) => media.id === sequence.sourceId) ?? null;
-    const group = project.groups.find((item) => item.id === sequence.sourceId);
-    return project.media.find((media) => group?.mediaIds.includes(media.id) && media.kind === 'video')
-        ?? project.media.find((media) => group?.mediaIds.includes(media.id)) ?? null;
+const audioEnvelopeCache = new Map();
+async function audioEnvelope(media) {
+    const info = await fs.stat(media.path);
+    if (!info.isFile()) throw new Error('Audiodatei ist nicht mehr verfügbar.');
+    const key = `${media.path}:${info.size}:${info.mtimeMs}`;
+    const cached = audioEnvelopeCache.get(key);
+    if (cached) return cached;
+    const seconds = Math.max(5, Math.min(600, media.durationSeconds || 600));
+    const ffmpeg = await mediaEngine.require('ffmpeg');
+    const { stdout } = await execFileAsync(ffmpeg, [
+        '-nostdin', '-v', 'error', '-i', media.path, '-map', '0:a:0', '-vn',
+        '-ac', '1', '-ar', '2000', '-t', String(seconds), '-f', 's16le', 'pipe:1',
+    ], { encoding: 'buffer', maxBuffer: 32 * 1024 * 1024, windowsHide: true });
+    const envelope = pcm16Envelope(stdout, 2000, 50);
+    if (envelope.length < 250) throw new Error('Tonspur ist für eine Synchronisierung zu kurz.');
+    audioEnvelopeCache.set(key, envelope);
+    if (audioEnvelopeCache.size > 150) audioEnvelopeCache.delete(audioEnvelopeCache.keys().next().value);
+    return envelope;
+}
+
+async function syncMulticamAudio(event, requestValue) {
+    const request = validateMulticamSyncRequest(requestValue);
+    const audioMedia = request.media.filter((media) => media.hasAudio);
+    const result = { groupId: request.groupId, referenceMediaId: null, referenceByMediaId: {}, offsetsSeconds: {}, confidenceByMediaId: {}, waveforms: {}, failures: [] };
+    if (audioMedia.length < 2) {
+        result.failures.push('Für die automatische Synchronisierung werden mindestens zwei Tonspuren benötigt.');
+        return result;
+    }
+    const total = audioMedia.length;
+    let completed = 0;
+    const report = (message) => event.sender.send('multicam:sync-progress', { groupId: request.groupId, completed, total, message });
+    const tracks = [];
+    for (const media of audioMedia) {
+        report(`Tonspuren werden abgeglichen (${completed + 1}/${total})`);
+        try {
+            const envelope = await audioEnvelope(media);
+            result.waveforms[media.id] = compactWaveform(envelope, 6000);
+            tracks.push({ ...media, envelope });
+        } catch (error) {
+            result.failures.push(`${media.id}: ${error instanceof Error ? error.message : 'Tonspur konnte nicht gelesen werden.'}`);
+        }
+        completed += 1;
+    }
+    const alignment = alignAudioTracks(tracks, 50, 15);
+    result.referenceMediaId = alignment.referenceMediaId;
+    result.referenceByMediaId = alignment.referenceByMediaId;
+    result.offsetsSeconds = alignment.offsetsSeconds;
+    result.confidenceByMediaId = alignment.confidenceByMediaId;
+    result.failures.push(...alignment.unmatchedIds.map((id) => `${id}: Keine eindeutige Übereinstimmung mit einer überlappenden Tonspur.`));
+    report('Tonspuren wurden analysiert.');
+    return result;
 }
 
 function even(value) {
@@ -227,16 +276,6 @@ function catmullPoint(points, progress, smoothing) {
         x: (2 * t3 - 3 * t2 + 1) * start.x + (t3 - 2 * t2 + t) * tangentStart.x + (-2 * t3 + 3 * t2) * end.x + (t3 - t2) * tangentEnd.x,
         y: (2 * t3 - 3 * t2 + 1) * start.y + (t3 - 2 * t2 + t) * tangentStart.y + (-2 * t3 + 3 * t2) * end.y + (t3 - t2) * tangentEnd.y,
     };
-}
-
-function tracerFrameAtProgress(points, progress, fallbackStart, fallbackEnd) {
-    const ordered = [...points].sort((left, right) => left.frame - right.frame);
-    if (ordered.length < 2)
-        return fallbackStart + (fallbackEnd - fallbackStart) * progress;
-    const scaled = progress * (ordered.length - 1);
-    const index = Math.min(ordered.length - 2, Math.floor(scaled));
-    const segmentProgress = scaled - index;
-    return ordered[index].frame + (ordered[index + 1].frame - ordered[index].frame) * segmentProgress;
 }
 
 function cameraLockTargetPoint(lock, point) {
@@ -405,7 +444,10 @@ function holeCardFilters(project, block, settings, videoLabel, audioLabel) {
 async function exportVideo(event, request) {
     const ffmpeg = await mediaEngine.require('ffmpeg');
     const sequences = request.sequenceIds.map((id) => request.project.sequences.find((sequence) => sequence.id === id)).filter(Boolean);
-    const segments = sequences.map((sequence) => ({ sequence, media: exportMediaForSequence(request.project, sequence), block: request.project.blocks.find((block) => block.id === sequence.targetBlockId) })).filter((item) => item.media && item.block);
+    const segments = sequences.map((sequence) => {
+        const media = exportMediaForSequence(request.project, sequence);
+        return { sequence, media, range: media ? exportRangeForSequence(sequence, media) : null, block: request.project.blocks.find((block) => block.id === sequence.targetBlockId) };
+    }).filter((item) => item.media && item.range && item.block);
     if (!segments.length)
         return { canceled: false, error: 'Keine exportierbaren Sequenzen vorhanden.' };
     await assertMediaFilesAreReadable({ media: segments.map((segment) => segment.media) });
@@ -416,17 +458,17 @@ async function exportVideo(event, request) {
     const outputPath = path.extname(result.filePath) ? result.filePath : `${result.filePath}.${settings.extension}`;
     const temporaryDirectory = await fs.mkdtemp(path.join(app.getPath('temp'), 'golf-round-export-'));
     const holeChangeCount = segments.slice(0, -1).filter((item, index) => item.block.hole !== segments[index + 1].block.hole).length;
-    const totalDuration = segments.reduce((total, item) => total + (item.sequence.outFrame - item.sequence.inFrame) / item.sequence.sourceFps, 0) + holeChangeCount * 1.8;
+    const totalDuration = segments.reduce((total, item) => total + (item.range.outFrame - item.range.inFrame) / item.range.sourceFps, 0) + holeChangeCount * 1.8;
     event.sender.send('export:progress', { phase: 'preparing', percent: 0, message: `${settings.width}×${settings.height} · ${settings.fps} fps · ${settings.videoCodec}${settings.accelerated ? ' (GPU)' : ''}` });
     try {
         const args = ['-y', '-hide_banner'];
-        segments.forEach(({ sequence, media }) => {
-            args.push('-ss', (sequence.inFrame / sequence.sourceFps).toFixed(6), '-t', ((sequence.outFrame - sequence.inFrame) / sequence.sourceFps).toFixed(6), '-i', media.path);
+        segments.forEach(({ range, media }) => {
+            args.push('-ss', (range.inFrame / range.sourceFps).toFixed(6), '-t', ((range.outFrame - range.inFrame) / range.sourceFps).toFixed(6), '-i', media.path);
         });
         const graph = [];
         const concatLabels = [];
-        segments.forEach(({ sequence, media, block }, index) => {
-            const duration = (sequence.outFrame - sequence.inFrame) / sequence.sourceFps;
+        segments.forEach(({ sequence, media, range, block }, index) => {
+            const duration = (range.outFrame - range.inFrame) / range.sourceFps;
             const previousBlock = segments[index - 1]?.block;
             const nextBlock = segments[index + 1]?.block;
             const startsHole = Boolean(previousBlock && previousBlock.hole !== block.hole);
@@ -539,14 +581,22 @@ function registerIpc() {
         }),
         probeFiles: probePaths,
     });
+    registerTrustedHandler('external:open', async (_event, value) => {
+        const url = new URL(String(value));
+        if (url.protocol !== 'https:' || url.hostname !== 'github.com' || !url.pathname.startsWith('/johannesstuck-eng/Golf-Studio/'))
+            throw new IpcValidationError('Externer Link wurde blockiert.');
+        await shell.openExternal(url.href);
+        return { opened: true };
+    });
     registerTrustedHandler('media:choose', chooseMedia);
     registerTrustedHandler('media:probe-paths', (_event, paths) => probePaths(paths));
+    registerTrustedHandler('multicam:sync-audio', (event, request) => syncMulticamAudio(event, request));
     registerTrustedHandler('project:save', async (_event, projectValue) => {
         const project = validateProject(projectValue);
         const result = await dialog.showSaveDialog({
             title: 'Golfprojekt speichern',
             defaultPath: 'Neue Golfrunde.golfcut',
-            filters: [{ name: 'Golf Round Studio Projekt', extensions: ['golfcut'] }],
+            filters: [{ name: 'CUT18 Projekt', extensions: ['golfcut'] }],
         });
         if (result.canceled || !result.filePath)
             return { canceled: true };
@@ -556,7 +606,7 @@ function registerIpc() {
     registerTrustedHandler('project:open', async () => {
         const result = await dialog.showOpenDialog({
             title: 'Golfprojekt öffnen', properties: ['openFile'],
-            filters: [{ name: 'Golf Round Studio Projekt', extensions: ['golfcut'] }],
+            filters: [{ name: 'CUT18 Projekt', extensions: ['golfcut'] }],
         });
         if (result.canceled || !result.filePaths[0])
             return { canceled: true };
@@ -569,7 +619,7 @@ function registerIpc() {
             throw new IpcValidationError('Projektdatei enthält kein gültiges Projektobjekt.');
         return { canceled: false, path: filePath, project };
     });
-    registerTrustedHandler('scorecard:choose', async () => {
+    registerTrustedHandler('scorecard:choose', async (_event, holeCount) => {
         const result = await dialog.showOpenDialog({
             title: 'Scorecard auswählen',
             properties: ['openFile'],
@@ -577,9 +627,10 @@ function registerIpc() {
                 { name: 'Scorecard (Bild oder PDF)', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'webp'] },
             ],
         });
-        return result.canceled || !result.filePaths[0]
-            ? { canceled: true }
-            : { canceled: false, path: result.filePaths[0] };
+        if (result.canceled || !result.filePaths[0]) return { canceled: true, status: 'manual', tees: [], warnings: [] };
+        const scorecardPath = result.filePaths[0];
+        const analysis = await analyzeScorecard(scorecardPath, holeCount);
+        return { canceled: false, path: scorecardPath, ...analysis };
     });
     registerTrustedHandler('export:start', async (event, requestValue) => {
         if (activeExportProcess)
@@ -633,7 +684,7 @@ function createWindow() {
         })[character] ?? character);
         const html = `<!doctype html><html lang="de"><meta charset="utf-8"><title>Startfehler</title>
       <body style="margin:0;background:#0a0d0c;color:#f1f5f2;font:16px/1.5 system-ui;padding:48px">
-      <h1 style="color:#79e66d">Golf Round Studio konnte die Oberfläche nicht laden.</h1>
+      <h1 style="color:#79e66d">CUT18 konnte die Oberfläche nicht laden.</h1>
       <p>${safeMessage}</p><p>Bitte die App schließen und das aktuelle Programmpaket erneut entpacken.</p></body></html>`;
         void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
     };
