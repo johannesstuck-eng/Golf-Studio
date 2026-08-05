@@ -5,6 +5,7 @@ import {
     type GolfProject,
     type HoleData,
     type MediaItem,
+    type MulticamAngle,
     type MulticamSuggestion,
     type OverlayPosition,
     type OverlayType,
@@ -64,7 +65,7 @@ export function createDefaultBlocks(settings: ProjectSettings): GolfBlock[] {
 
 export function createProject(settings: ProjectSettings): GolfProject {
     return {
-        schemaVersion: 6,
+        schemaVersion: 7,
         settings,
         media: [],
         suggestions: [],
@@ -106,13 +107,24 @@ export function normalizeProject(input: unknown): GolfProject {
         holes: defaultCourseData.holes.map((hole) => ({ ...hole, ...(rawHoles.find((item) => item.number === hole.number) ?? {}) })),
     };
     return {
-        schemaVersion: 6,
+        schemaVersion: 7,
         settings,
         media: Array.isArray(raw.media) ? raw.media : [],
         suggestions: Array.isArray(raw.suggestions) ? raw.suggestions : [],
         groups: Array.isArray(raw.groups) ? raw.groups : [],
         blocks,
-        sequences: Array.isArray(raw.sequences) ? raw.sequences : [],
+        sequences: Array.isArray(raw.sequences) ? raw.sequences.map((sequence) => ({
+            ...sequence,
+            activeMediaId: sequence.sourceType === 'group' ? sequence.activeMediaId : undefined,
+            multicamAngles: sequence.sourceType === 'group' && Array.isArray(sequence.multicamAngles)
+                ? sequence.multicamAngles.map((angle) => ({
+                    mediaId: angle.mediaId,
+                    inFrame: Math.max(0, Math.round(angle.inFrame)),
+                    outFrame: Math.max(1, Math.round(angle.outFrame)),
+                    sourceFps: angle.sourceFps,
+                }))
+                : undefined,
+        })) : [],
         overlays: Array.isArray(raw.overlays) ? raw.overlays.map((overlay) => ({
             ...overlay,
             position: overlay.position ?? (overlay.type === 'hole-info' ? 'top-right' : overlay.type === 'score-card' ? 'top-left' : 'bottom-left'),
@@ -183,13 +195,15 @@ export function upsertSequence(project: GolfProject, draft: SequenceDraft): Golf
         inFrame: Math.max(0, Math.round(draft.inFrame)),
         outFrame: Math.max(1, Math.round(draft.outFrame)),
         sourceFps: draft.sourceFps,
+        activeMediaId: draft.sourceType === 'group' ? draft.activeMediaId : undefined,
+        multicamAngles: draft.sourceType === 'group' ? draft.multicamAngles : undefined,
         targetBlockId: target.id,
         createdAt: oldSequence?.createdAt ?? now,
         updatedAt: now,
     };
     return {
         ...project,
-        schemaVersion: 6,
+        schemaVersion: 7,
         blocks,
         sequences: oldSequence
             ? project.sequences.map((item) => item.id === sequenceId ? sequence : item)
@@ -327,7 +341,7 @@ export function toggleSequenceOverlay(project: GolfProject, sequenceId: string, 
             endFrame: sequence.outFrame - sequence.inFrame,
             position: type === 'hole-info' ? 'top-right' as const : type === 'score-card' ? 'top-left' as const : 'bottom-left' as const,
         }];
-    return { ...project, schemaVersion: 6, overlays, modifiedAt: new Date().toISOString() };
+    return { ...project, schemaVersion: 7, overlays, modifiedAt: new Date().toISOString() };
 }
 
 function defaultShotTracer(sequence: GolfProject['sequences'][number]): ShotTracerEffect {
@@ -354,7 +368,7 @@ export function toggleShotTracer(project: GolfProject, sequenceId: string): Golf
     const shotTracers = existing
         ? project.shotTracers.map((tracer) => tracer.id === existing.id ? { ...tracer, enabled: !tracer.enabled } : tracer)
         : [...project.shotTracers, defaultShotTracer(sequence)];
-    return { ...project, schemaVersion: 6, shotTracers, modifiedAt: new Date().toISOString() };
+    return { ...project, schemaVersion: 7, shotTracers, modifiedAt: new Date().toISOString() };
 }
 
 export function updateShotTracer(project: GolfProject, sequenceId: string, patch: Partial<Omit<ShotTracerEffect, 'id' | 'sequenceId'>>): GolfProject {
@@ -382,7 +396,7 @@ export function updateShotTracer(project: GolfProject, sequenceId: string, patch
     };
     return {
         ...project,
-        schemaVersion: 6,
+        schemaVersion: 7,
         shotTracers: project.shotTracers.map((item) => item.id === tracer.id ? updated : item),
         modifiedAt: new Date().toISOString(),
     };
@@ -542,11 +556,44 @@ export function movePlayerInOrder(project: GolfProject, hole: number, blockOrder
     const playerOrders = exists
         ? project.playerOrders.map((order) => order.hole === hole && order.blockOrder === blockOrder ? { ...order, playerIds } : order)
         : [...project.playerOrders, { hole, blockOrder, playerIds }];
-    return { ...project, schemaVersion: 6, playerOrders, modifiedAt: new Date().toISOString() };
+    return { ...project, schemaVersion: 7, playerOrders, modifiedAt: new Date().toISOString() };
 }
 
 const start = (media: MediaItem) => Date.parse(media.recordedAt);
 const end = (media: MediaItem) => start(media) + media.durationSeconds * 1000;
+
+export function multicamTimeline(project: GolfProject, groupId: string): { startMs: number; endMs: number; fps: number; media: MediaItem[] } | null {
+    const group = project.groups.find((item) => item.id === groupId);
+    const media = (group?.mediaIds ?? [])
+        .map((mediaId) => project.media.find((item) => item.id === mediaId))
+        .filter((item): item is MediaItem => Boolean(item && item.kind === 'video' && Number.isFinite(start(item)) && item.durationSeconds > 0));
+    if (!media.length) return null;
+    return {
+        startMs: Math.min(...media.map(start)),
+        endMs: Math.max(...media.map(end)),
+        fps: Math.max(1, ...media.map((item) => item.fps && item.fps > 0 ? item.fps : project.settings.frameRate ?? 30)),
+        media,
+    };
+}
+
+export function multicamAnglesForRange(project: GolfProject, groupId: string, inFrame: number, outFrame: number, sourceFps: number): MulticamAngle[] {
+    const timeline = multicamTimeline(project, groupId);
+    if (!timeline || outFrame <= inFrame || sourceFps <= 0) return [];
+    const selectionStartMs = timeline.startMs + inFrame / sourceFps * 1000;
+    const selectionEndMs = timeline.startMs + outFrame / sourceFps * 1000;
+    return timeline.media.flatMap((media) => {
+        const overlapStartMs = Math.max(selectionStartMs, start(media));
+        const overlapEndMs = Math.min(selectionEndMs, end(media));
+        if (overlapEndMs <= overlapStartMs) return [];
+        const fps = media.fps && media.fps > 0 ? media.fps : sourceFps;
+        return [{
+            mediaId: media.id,
+            inFrame: Math.max(0, Math.round((overlapStartMs - start(media)) / 1000 * fps)),
+            outFrame: Math.max(1, Math.round((overlapEndMs - start(media)) / 1000 * fps)),
+            sourceFps: fps,
+        }];
+    });
+}
 
 function filenameCameraFamily(name: string): string {
     const stem = name.replace(/\.[^.]+$/, '').toLowerCase();

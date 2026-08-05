@@ -6,7 +6,7 @@ const fixturePath = process.platform === 'win32' ? 'C:\\video\\round.mp4' : '/vi
 
 function projectFixture() {
     return {
-        schemaVersion: 6,
+        schemaVersion: 7,
         settings: { course: 'Testplatz', holes: 9, frameRate: 30, players: [{ id: 'player-1', name: 'Alex' }] },
         media: [{ id: 'media-1', path: fixturePath, name: 'round.mp4', kind: 'video', durationSeconds: 10, width: 1920, height: 1080, fps: 30, codec: 'h264', hasAudio: true, sizeBytes: 1024, bitDepth: 8 }],
         groups: [],
@@ -42,6 +42,15 @@ describe('IPC validation', () => {
         const project = projectFixture();
         project.sequences[0].sourceId = 'missing-media';
         assert.throws(() => validateExportRequest({ project, sequenceIds: ['sequence-1'], profile: 'source-matched' }), /Unbekannte Quelle/);
+    });
+
+    it('validates multicam angles against their group', () => {
+        const project = projectFixture();
+        project.groups = [{ id: 'group-1', mediaIds: ['media-1'] }];
+        project.sequences[0] = { ...project.sequences[0], sourceType: 'group', sourceId: 'group-1', activeMediaId: 'media-1', multicamAngles: [{ mediaId: 'media-1', inFrame: 0, outFrame: 300, sourceFps: 30 }] };
+        assert.doesNotThrow(() => validateExportRequest({ project, sequenceIds: ['sequence-1'], profile: 'source-matched' }));
+        project.sequences[0].multicamAngles[0].mediaId = 'foreign-camera';
+        assert.throws(() => validateExportRequest({ project, sequenceIds: ['sequence-1'], profile: 'source-matched' }), /Multicam-Gruppe/);
     });
 
     it('checks that selected input paths resolve to regular files', async () => {

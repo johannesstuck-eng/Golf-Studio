@@ -11,7 +11,7 @@
     "start": "electron .",
     "build": "vite build",
     "build:landing": "vite build --config vite.landing.config.ts",
-    "test": "vitest run && node --test tools/orchestrator.node-test.mjs tools/lockfile-security.node-test.mjs dist-electron/ipc-validation.node-test.mjs",
+    "test": "vitest run && node --test tools/orchestrator.node-test.mjs tools/lockfile-security.node-test.mjs dist-electron/ipc-validation.node-test.mjs dist-electron/multicam-export.node-test.mjs",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run build",
     "orchestrate": "node tools/orchestrator.mjs",

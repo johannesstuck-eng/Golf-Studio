@@ -129,11 +129,13 @@ export function validateProject(projectValue) {
     if (mediaIds.size !== media.length) fail('project.media', 'Doppelte Medien-IDs sind nicht erlaubt.');
 
     const groups = array(project.groups, 'project.groups', limits.groups);
+    const groupMediaIds = new Map();
     const groupIds = new Set(groups.map((value, index) => {
         const group = record(value, `project.groups[${index}]`);
         const id = string(group.id, `project.groups[${index}].id`, 128);
         const ids = uniqueStrings(group.mediaIds, `project.groups[${index}].mediaIds`, limits.media);
         if (ids.some((mediaId) => !mediaIds.has(mediaId))) fail(`project.groups[${index}].mediaIds`, 'Unbekannte Medien-ID.');
+        groupMediaIds.set(id, new Set(ids));
         return id;
     }));
     if (groupIds.size !== groups.length) fail('project.groups', 'Doppelte Gruppen-IDs sind nicht erlaubt.');
@@ -170,6 +172,28 @@ export function validateProject(projectValue) {
         if (sequence.outFrame <= sequence.inFrame) fail(`project.sequences[${index}]`, 'outFrame muss hinter inFrame liegen.');
         finite(sequence.sourceFps, `project.sequences[${index}].sourceFps`, 1, 240);
         if ((sequence.outFrame - sequence.inFrame) / sequence.sourceFps > 6 * 60 * 60) fail(`project.sequences[${index}]`, 'Sequenz ist länger als sechs Stunden.');
+        if (sequence.sourceType === 'group') {
+            const allowedMediaIds = groupMediaIds.get(sequence.sourceId) ?? new Set();
+            if (sequence.activeMediaId !== undefined) {
+                const activeMediaId = string(sequence.activeMediaId, `project.sequences[${index}].activeMediaId`, 128);
+                if (!allowedMediaIds.has(activeMediaId)) fail(`project.sequences[${index}].activeMediaId`, 'Kamera gehört nicht zur Multicam-Gruppe.');
+            }
+            if (sequence.multicamAngles !== undefined) {
+                const angles = array(sequence.multicamAngles, `project.sequences[${index}].multicamAngles`, limits.media);
+                const angleMediaIds = new Set();
+                angles.forEach((value, angleIndex) => {
+                    const angle = record(value, `project.sequences[${index}].multicamAngles[${angleIndex}]`);
+                    const mediaId = string(angle.mediaId, `project.sequences[${index}].multicamAngles[${angleIndex}].mediaId`, 128);
+                    if (!allowedMediaIds.has(mediaId)) fail(`project.sequences[${index}].multicamAngles[${angleIndex}].mediaId`, 'Kamera gehört nicht zur Multicam-Gruppe.');
+                    if (angleMediaIds.has(mediaId)) fail(`project.sequences[${index}].multicamAngles`, 'Doppelte Kamera-Winkel sind nicht erlaubt.');
+                    angleMediaIds.add(mediaId);
+                    finite(angle.inFrame, `project.sequences[${index}].multicamAngles[${angleIndex}].inFrame`, 0, 1_000_000_000, true);
+                    finite(angle.outFrame, `project.sequences[${index}].multicamAngles[${angleIndex}].outFrame`, 1, 1_000_000_000, true);
+                    if (angle.outFrame <= angle.inFrame) fail(`project.sequences[${index}].multicamAngles[${angleIndex}]`, 'outFrame muss hinter inFrame liegen.');
+                    finite(angle.sourceFps, `project.sequences[${index}].multicamAngles[${angleIndex}].sourceFps`, 1, 240);
+                });
+            }
+        }
         if (!blockIds.has(sequence.targetBlockId)) fail(`project.sequences[${index}].targetBlockId`, 'Unbekannte Block-ID.');
         return id;
     }));

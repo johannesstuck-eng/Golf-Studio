@@ -8,7 +8,7 @@ import {
 import {
     addBlock, blockLabel, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
     effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence,
-    normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setScorecardSource,
+    multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setScorecardSource,
     suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore,
     updateSequenceOverlay, updateShotTracer, upsertSequence,
 } from './model';
@@ -299,10 +299,13 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
     const requestedBlock = project.blocks.find((block) => block.id === requestedSequence?.targetBlockId);
     const videoRef = useRef<HTMLVideoElement>(null);
     const audioRef = useRef<HTMLAudioElement>(null);
+    const previewRefs = useRef(new Map<string, HTMLVideoElement>());
     const initialLoad = useRef(Boolean(requestedSequence));
     const player = () => videoRef.current ?? audioRef.current;
     const [sourceType, setSourceType] = useState<SourceType>(requestedSequence?.sourceType ?? 'media');
     const [sourceId, setSourceId] = useState(requestedSequence?.sourceId ?? initialMediaId ?? project.media[0]?.id ?? '');
+    const initialGroup = project.groups.find((group) => group.id === requestedSequence?.sourceId);
+    const [activeMediaId, setActiveMediaId] = useState(requestedSequence?.activeMediaId ?? initialGroup?.mediaIds[0] ?? '');
     const [currentFrame, setCurrentFrame] = useState(requestedSequence?.inFrame ?? 0);
     const [inFrame, setInFrame] = useState(requestedSequence?.inFrame ?? 0);
     const [outFrame, setOutFrame] = useState(requestedSequence?.outFrame ?? 1);
@@ -310,26 +313,42 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
     const [playSelection, setPlaySelection] = useState(false);
     const [hole, setHole] = useState(requestedBlock?.hole ?? 1);
     const [playerId, setPlayerId] = useState(requestedBlock?.playerId ?? project.settings.players[0]?.id ?? '');
+    const [blockType, setBlockType] = useState<BlockType>(requestedBlock?.type ?? 'tee-shot');
     const [targetBlockId, setTargetBlockId] = useState(requestedBlock?.id ?? '');
     const [editingId, setEditingId] = useState<string | undefined>(requestedSequence?.id);
     const [message, setMessage] = useState('');
+    const groupTimeline = sourceType === 'group' ? multicamTimeline(project, sourceId) : null;
+    const groupMedia = groupTimeline?.media ?? [];
     const source = sourceType === 'media'
         ? project.media.find((media) => media.id === sourceId)
-        : project.media.find((media) => project.groups.find((group) => group.id === sourceId)?.mediaIds.includes(media.id) && media.kind === 'video')
-            ?? project.media.find((media) => project.groups.find((group) => group.id === sourceId)?.mediaIds.includes(media.id));
-    const fps = source?.fps && source.fps > 0 ? source.fps : project.settings.frameRate ?? 30;
-    const maxFrames = Math.max(1, Math.round((source?.durationSeconds ?? 0) * fps));
+        : groupMedia.find((media) => media.id === activeMediaId) ?? groupMedia[0];
+    const fps = sourceType === 'group'
+        ? groupTimeline?.fps ?? project.settings.frameRate ?? 30
+        : source?.fps && source.fps > 0 ? source.fps : project.settings.frameRate ?? 30;
+    const maxFrames = Math.max(1, Math.round((sourceType === 'group' && groupTimeline
+        ? (groupTimeline.endMs - groupTimeline.startMs) / 1000
+        : source?.durationSeconds ?? 0) * fps));
     const sourceSequences = project.sequences.filter((sequence) => sequence.sourceType === sourceType && sequence.sourceId === sourceId);
     const availableBlocks = project.blocks
         .filter((block) => block.hole === hole && block.playerId === playerId)
         .sort((left, right) => left.order - right.order);
-    const targetBlock = availableBlocks.find((block) => block.id === targetBlockId) ?? availableBlocks[0];
+    const matchingBlocks = availableBlocks.filter((block) => block.type === blockType);
+    const targetBlock = matchingBlocks.find((block) => block.id === targetBlockId) ?? matchingBlocks[0];
+    const mediaTimeForFrame = useCallback((frame: number, media: MediaItem): number => {
+        if (sourceType !== 'group' || !groupTimeline) return frame / fps;
+        const offsetSeconds = (Date.parse(media.recordedAt) - groupTimeline.startMs) / 1000;
+        return Math.min(media.durationSeconds, Math.max(0, frame / fps - offsetSeconds));
+    }, [fps, groupTimeline, sourceType]);
     const seek = useCallback((frame: number) => {
         const target = Math.min(maxFrames, Math.max(0, Math.round(frame)));
         setCurrentFrame(target);
         const element = player();
-        if (element) element.currentTime = target / fps;
-    }, [fps, maxFrames]);
+        if (element && source) element.currentTime = mediaTimeForFrame(target, source);
+        if (sourceType === 'group') previewRefs.current.forEach((preview, mediaId) => {
+            const media = groupMedia.find((item) => item.id === mediaId);
+            if (media && preview.readyState >= 1) preview.currentTime = mediaTimeForFrame(target, media);
+        });
+    }, [groupMedia, maxFrames, mediaTimeForFrame, source, sourceType]);
     const resetMarks = useCallback(() => {
         setCurrentFrame(0); setInFrame(0); setOutFrame(Math.min(maxFrames, Math.max(1, Math.round(fps * 5)))); setEditingId(undefined); setMessage('');
     }, [fps, maxFrames]);
@@ -338,8 +357,12 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
         resetMarks();
     }, [sourceId, sourceType, resetMarks]);
     useEffect(() => {
-        if (!availableBlocks.some((block) => block.id === targetBlockId)) setTargetBlockId(availableBlocks[0]?.id ?? '');
-    }, [availableBlocks, targetBlockId]);
+        if (sourceType === 'group' && !groupMedia.some((media) => media.id === activeMediaId)) setActiveMediaId(groupMedia[0]?.id ?? '');
+    }, [activeMediaId, groupMedia, sourceType]);
+    useEffect(() => {
+        if (!matchingBlocks.some((block) => block.id === targetBlockId)) setTargetBlockId(matchingBlocks[0]?.id ?? '');
+    }, [matchingBlocks, targetBlockId]);
+    useEffect(() => { if (source) seek(currentFrame); }, [activeMediaId]);
     useEffect(() => {
         const key = (event: KeyboardEvent) => {
             if ((event.target as HTMLElement)?.matches('input, select, textarea')) return;
@@ -354,30 +377,47 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId }
     }, [currentFrame, inFrame, seek]);
     const togglePlay = () => { const element = player(); if (element) element.paused ? void element.play() : element.pause(); };
     const playRange = () => { seek(inFrame); setPlaySelection(true); window.setTimeout(() => void player()?.play(), 0); };
+    const frameFromMediaTime = (media: MediaItem, localSeconds: number) => {
+        if (sourceType !== 'group' || !groupTimeline) return Math.round(localSeconds * fps);
+        const offsetSeconds = (Date.parse(media.recordedAt) - groupTimeline.startMs) / 1000;
+        return Math.round((offsetSeconds + localSeconds) * fps);
+    };
+    const handleTimeUpdate = (element: HTMLMediaElement, media: MediaItem) => {
+        const frame = frameFromMediaTime(media, element.currentTime);
+        setCurrentFrame(frame);
+        if (sourceType === 'group') previewRefs.current.forEach((preview, mediaId) => {
+            const previewMedia = groupMedia.find((item) => item.id === mediaId);
+            if (previewMedia && preview.readyState >= 1) preview.currentTime = mediaTimeForFrame(frame, previewMedia);
+        });
+        if (playSelection && frame >= outFrame) { element.pause(); setPlaySelection(false); seek(outFrame); }
+    };
     const saveSequence = () => {
         if (!source) return;
         try {
-            if (!targetBlock) throw new Error('Für diesen Spieler ist noch kein Block vorhanden.');
-            const next = upsertSequence(project, { id: editingId, sourceType, sourceId, inFrame, outFrame, sourceFps: fps, hole, playerId, blockType: targetBlock.type, targetBlockId: targetBlock.id });
-            setProject(next); setEditingId(undefined); setMessage('Sequenz im Projekt gespeichert.');
+            const multicamAngles = sourceType === 'group' ? multicamAnglesForRange(project, sourceId, inFrame, outFrame, fps) : undefined;
+            if (sourceType === 'group' && !multicamAngles?.length) throw new Error('In diesem Bereich ist keine Kamera aktiv.');
+            const selectedMediaId = multicamAngles?.some((angle) => angle.mediaId === activeMediaId) ? activeMediaId : multicamAngles?.[0]?.mediaId;
+            const next = upsertSequence(project, { id: editingId, sourceType, sourceId, inFrame, outFrame, sourceFps: fps, activeMediaId: selectedMediaId, multicamAngles, hole, playerId, blockType, targetBlockId: targetBlock?.id });
+            setProject(next); setEditingId(undefined); setMessage(sourceType === 'group' ? `Multicam-Sequenz mit ${multicamAngles?.length ?? 0} Kameras gespeichert.` : 'Sequenz im Projekt gespeichert.');
         } catch (error) { setMessage(error instanceof Error ? error.message : 'Sequenz konnte nicht gespeichert werden.'); }
     };
     const editSequence = (sequence: VirtualSequence) => {
         const target = project.blocks.find((block) => block.id === sequence.targetBlockId);
         if (!target) return;
-        setEditingId(sequence.id); setInFrame(sequence.inFrame); setOutFrame(sequence.outFrame); setHole(target.hole); setPlayerId(target.playerId); setTargetBlockId(target.id); seek(sequence.inFrame); setMessage('');
+        setEditingId(sequence.id); setInFrame(sequence.inFrame); setOutFrame(sequence.outFrame); setHole(target.hole); setPlayerId(target.playerId); setBlockType(target.type); setTargetBlockId(target.id); setActiveMediaId(sequence.activeMediaId ?? ''); seek(sequence.inFrame); setMessage('');
     };
     return <section className="review-workspace">
         <aside className="source-browser"><div className="source-tabs"><button className={sourceType === 'media' ? 'active' : ''} onClick={() => { setSourceType('media'); setSourceId(project.media[0]?.id ?? ''); }}>Clips</button><button className={sourceType === 'group' ? 'active' : ''} onClick={() => { setSourceType('group'); setSourceId(project.groups[0]?.id ?? ''); }}>Multicam</button></div>
             <div className="source-list">{sourceType === 'media' ? project.media.map((media) => <button className={sourceId === media.id ? 'active' : ''} onClick={() => setSourceId(media.id)} key={media.id}><MediaIcon media={media} /><span><b>{media.name}</b><small>{formatDuration(media.durationSeconds)} · {media.fps ?? '?'} fps</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'media' && sequence.sourceId === media.id).length}</em></button>) : project.groups.map((group) => <button className={sourceId === group.id ? 'active' : ''} onClick={() => setSourceId(group.id)} key={group.id}><div className="group-icon"><Layers size={20} /></div><span><b>{group.name}</b><small>{group.mediaIds.length} Quellen</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'group' && sequence.sourceId === group.id).length}</em></button>)}</div>
         </aside>
-        <div className="review-main">{source ? <><div className="review-heading"><div><div className="eyebrow"><span /> SICHTEN & ZUWEISEN</div><h1>{sourceType === 'group' ? project.groups.find((group) => group.id === sourceId)?.name : source.name}</h1><p>{sourceType === 'group' ? 'Primäre Kameraperspektive · Multicam-Feinsynchronisierung folgt separat' : `${source.device} · ${source.width ?? 'Audio'}${source.height ? `×${source.height}` : ''} · ${fps} fps`}</p></div><div className="keyboard-hints"><kbd>←</kbd><kbd>→</kbd> Frame · <kbd>I</kbd> In · <kbd>O</kbd> Out · <kbd>Leertaste</kbd> Play</div></div>
-            <div className="viewer-shell"><div className="viewer">{source.kind === 'video' ? <video ref={videoRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => { const frame = Math.round(event.currentTarget.currentTime * fps); setCurrentFrame(frame); if (playSelection && frame >= outFrame) { event.currentTarget.pause(); setPlaySelection(false); seek(outFrame); } }} onError={() => setMessage('Die Mediendatei konnte nicht geöffnet werden. Prüfe, ob sie noch am gespeicherten Ort liegt.')} /> : <div className="audio-view"><FileAudio size={70} /><b>{source.name}</b><audio ref={audioRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => { const frame = Math.round(event.currentTarget.currentTime * fps); setCurrentFrame(frame); if (playSelection && frame >= outFrame) { event.currentTarget.pause(); setPlaySelection(false); seek(outFrame); } }} /></div>}<button className="viewer-play" onClick={togglePlay}>{playing ? <Pause size={25} /> : <Play size={25} />}</button></div>
+        <div className="review-main">{source ? <><div className="review-heading"><div><div className="eyebrow"><span /> SICHTEN & ZUWEISEN</div><h1>{sourceType === 'group' ? project.groups.find((group) => group.id === sourceId)?.name : source.name}</h1><p>{sourceType === 'group' ? `${groupMedia.length} synchronisierte Kameras · aktive Perspektive: ${source.name}` : `${source.device} · ${source.width ?? 'Audio'}${source.height ? `×${source.height}` : ''} · ${fps} fps`}</p></div><div className="keyboard-hints"><kbd>←</kbd><kbd>→</kbd> Frame · <kbd>I</kbd> In · <kbd>O</kbd> Out · <kbd>Leertaste</kbd> Play</div></div>
+            {sourceType === 'group' && <div className="camera-monitor-grid">{groupMedia.map((media, index) => <button className={media.id === source.id ? 'active' : ''} onClick={() => { player()?.pause(); setActiveMediaId(media.id); }} key={media.id}><video muted preload="metadata" src={fileUrl(media.path)} ref={(element) => { if (element) previewRefs.current.set(media.id, element); else previewRefs.current.delete(media.id); }} onLoadedMetadata={(event) => { event.currentTarget.currentTime = mediaTimeForFrame(currentFrame, media); }} /><span><b>Kamera {index + 1}</b><small>{media.name} · {media.device}</small></span>{media.id === source.id && <em>AKTIV</em>}</button>)}</div>}
+            <div className="viewer-shell"><div className="viewer">{source.kind === 'video' ? <video ref={videoRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => handleTimeUpdate(event.currentTarget, source)} onError={() => setMessage('Die Mediendatei konnte nicht geöffnet werden. Prüfe, ob sie noch am gespeicherten Ort liegt.')} /> : <div className="audio-view"><FileAudio size={70} /><b>{source.name}</b><audio ref={audioRef} src={fileUrl(source.path)} onLoadedMetadata={() => seek(inFrame)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => handleTimeUpdate(event.currentTarget, source)} /></div>}<button className="viewer-play" onClick={togglePlay}>{playing ? <Pause size={25} /> : <Play size={25} />}</button></div>
                 <div className="transport"><button onClick={() => seek(currentFrame - 1)} title="Ein Frame zurück"><ChevronLeft size={20} /></button><button className="transport-play" onClick={togglePlay}>{playing ? <Pause size={18} /> : <Play size={18} />}</button><button onClick={() => seek(currentFrame + 1)} title="Ein Frame vor"><ChevronRight size={20} /></button><strong>{frameTime(currentFrame, fps)}</strong><span>Frame {currentFrame} / {maxFrames}</span></div>
                 <Filmstrip currentFrame={currentFrame} inFrame={inFrame} outFrame={outFrame} maxFrames={maxFrames} sequences={sourceSequences} onSeek={seek} onInChange={(frame) => setInFrame(Math.min(frame, outFrame - 1))} onOutChange={(frame) => setOutFrame(Math.max(frame, inFrame + 1))} />
                 <div className="mark-controls"><button onClick={() => setInFrame(Math.min(currentFrame, outFrame - 1))}><b>I</b><span>IN setzen<small>{frameTime(inFrame, fps)} · F{inFrame}</small></span></button><button onClick={playRange}><Play size={17} /><span>Auswahl abspielen<small>{formatDuration((outFrame - inFrame) / fps)}</small></span></button><button onClick={() => setOutFrame(Math.max(currentFrame, inFrame + 1))}><b>O</b><span>OUT setzen<small>{frameTime(outFrame, fps)} · F{outFrame}</small></span></button></div>
             </div>
-            <section className="assign-panel"><div><span className="field-label">Loch</span><select value={hole} onChange={(event) => setHole(Number(event.target.value))}>{Array.from({ length: project.settings.holes }, (_, index) => <option value={index + 1} key={index}>Loch {index + 1}</option>)}</select></div><div><span className="field-label">Spieler</span><select value={playerId} onChange={(event) => setPlayerId(event.target.value)}>{project.settings.players.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select></div><div><span className="field-label">Block</span><select value={targetBlock?.id ?? ''} onChange={(event) => setTargetBlockId(event.target.value)}>{availableBlocks.map((block) => <option value={block.id} key={block.id}>{block.label}</option>)}</select></div><button className="primary assign-button" onClick={saveSequence}><Scissors size={16} /> {editingId ? 'Änderungen speichern' : 'Sequenz zuweisen'}</button>{editingId && <button className="icon-button" title="Bearbeitung abbrechen" onClick={resetMarks}><X size={17} /></button>}</section>
+            <section className="assign-panel"><div><span className="field-label">Loch</span><select value={hole} onChange={(event) => { setHole(Number(event.target.value)); setTargetBlockId(''); }}>{Array.from({ length: project.settings.holes }, (_, index) => <option value={index + 1} key={index}>Loch {index + 1}</option>)}</select></div><div><span className="field-label">Spieler</span><select value={playerId} onChange={(event) => { setPlayerId(event.target.value); setTargetBlockId(''); }}>{project.settings.players.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select></div><div><span className="field-label">Schlag / Inhalt</span><select value={blockType} onChange={(event) => { setBlockType(event.target.value as BlockType); setTargetBlockId(''); }}>{BLOCK_TYPES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></div><button className="primary assign-button" onClick={saveSequence}><Scissors size={16} /> {editingId ? 'Änderungen speichern' : sourceType === 'group' ? `Alle ${groupMedia.length} Kameras zuweisen` : 'Sequenz zuweisen'}</button>{editingId && <button className="icon-button" title="Bearbeitung abbrechen" onClick={resetMarks}><X size={17} /></button>}</section>
             {message && <div className="inline-message review-message">{message}</div>}
             <AssignedSequences project={project} sequences={sourceSequences} onEdit={editSequence} onDelete={(id) => setProject(removeSequence(project, id))} />
         </> : <div className="empty-review"><Scissors size={42} /><h2>{sourceType === 'media' ? 'Noch keine Medien importiert' : 'Noch keine Multicam-Gruppe angelegt'}</h2><p>Wechsle zum Import und füge Rohmaterial hinzu.</p></div>}</div>
@@ -415,7 +455,7 @@ function AssignedSequences({ project, sequences, onEdit, onDelete }: { project: 
     return <section className="assigned"><div className="assigned-heading"><h3>Zugewiesene Bereiche</h3><span>Farbig auf der Filmleiste markiert · zum Korrigieren öffnen</span></div>{sequences.length ? <div className="assigned-list">{sequences.sort((left, right) => left.inFrame - right.inFrame).map((sequence) => {
         const block = project.blocks.find((item) => item.id === sequence.targetBlockId);
         const player = project.settings.players.find((item) => item.id === block?.playerId);
-        return <article key={sequence.id}><button className="sequence-open" onClick={() => onEdit(sequence)}><span className="sequence-number">{block?.hole ?? '?'}</span><span><b>Loch {block?.hole} · {player?.name} · {block ? blockLabel(block.type) : 'Unbekannter Block'}</b><small>{frameTime(sequence.inFrame, sequence.sourceFps)} – {frameTime(sequence.outFrame, sequence.sourceFps)} · {sequence.outFrame - sequence.inFrame} Frames</small></span></button><button className="delete-sequence" title="Sequenz löschen" onClick={() => onDelete(sequence.id)}><Trash2 size={16} /></button></article>;
+        return <article key={sequence.id}><button className="sequence-open" onClick={() => onEdit(sequence)}><span className="sequence-number">{block?.hole ?? '?'}</span><span><b>Loch {block?.hole} · {player?.name} · {block ? blockLabel(block.type) : 'Unbekannter Block'}</b><small>{frameTime(sequence.inFrame, sequence.sourceFps)} – {frameTime(sequence.outFrame, sequence.sourceFps)} · {sequence.outFrame - sequence.inFrame} Frames{sequence.multicamAngles?.length ? ` · ${sequence.multicamAngles.length} Kameras` : ''}</small></span></button><button className="delete-sequence" title="Sequenz löschen" onClick={() => onDelete(sequence.id)}><Trash2 size={16} /></button></article>;
     })}</div> : <div className="assigned-empty">Setze In und Out und weise den ersten Bereich einem Golfblock zu.</div>}</section>;
 }
 
@@ -1252,7 +1292,7 @@ function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfPr
     const totalDuration = project.sequences.reduce((sum, sequence) => sum + (sequence.outFrame - sequence.inFrame) / sequence.sourceFps, 0);
     const sourceName = (sequence: VirtualSequence) => sequence.sourceType === 'media'
         ? project.media.find((media) => media.id === sequence.sourceId)?.name ?? 'Fehlender Clip'
-        : project.groups.find((group) => group.id === sequence.sourceId)?.name ?? 'Fehlende Multicam-Gruppe';
+        : `${project.groups.find((group) => group.id === sequence.sourceId)?.name ?? 'Fehlende Multicam-Gruppe'}${sequence.multicamAngles?.length ? ` · ${sequence.multicamAngles.length} Kameras` : ''}`;
     const removeBlock = (blockId: string, sequenceCount: number) => {
         if (sequenceCount && !window.confirm(`Dieser Block enthält ${sequenceCount} Sequenz${sequenceCount === 1 ? '' : 'en'}. Block und Sequenzen wirklich löschen?`)) return;
         setProject(deleteBlock(project, blockId));

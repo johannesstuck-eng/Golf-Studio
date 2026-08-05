@@ -122,9 +122,18 @@ export interface VirtualSequence {
     inFrame: number;
     outFrame: number;
     sourceFps: number;
+    activeMediaId?: string;
+    multicamAngles?: MulticamAngle[];
     targetBlockId: string;
     createdAt: string;
     updatedAt: string;
+}
+
+export interface MulticamAngle {
+    mediaId: string;
+    inFrame: number;
+    outFrame: number;
+    sourceFps: number;
 }
 
 export type OverlayType = 'player-card' | 'hole-info' | 'score-card';
@@ -227,6 +236,8 @@ export interface SequenceDraft {
     inFrame: number;
     outFrame: number;
     sourceFps: number;
+    activeMediaId?: string;
+    multicamAngles?: MulticamAngle[];
     hole: number;
     playerId: string;
     blockType: BlockType;

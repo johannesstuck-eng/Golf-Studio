@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, setScorecardSource, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence } from './model';
+import { addBlock, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, setScorecardSource, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence } from './model';
 import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
@@ -15,7 +15,7 @@ describe('project model', () => {
     it('upgrades old projects without losing media', () => {
         const old = { schemaVersion: 1, settings, media: [{ id: 'media-1' }], suggestions: [], groups: [] };
         const project = normalizeProject(old);
-        expect(project.schemaVersion).toBe(6);
+        expect(project.schemaVersion).toBe(7);
         expect(project.media).toHaveLength(1);
         expect(project.blocks).toHaveLength(36);
         expect(project.sequences).toEqual([]);
@@ -124,6 +124,26 @@ describe('project model', () => {
         expect(suggestions.every((suggestion) => suggestion.confidence === 'high')).toBe(true);
     });
 
+    it('transfers every overlapping camera angle on the shared multicam timeline', () => {
+        const project = createProject(settings);
+        const mediaBase = { name: 'clip.mp4', kind: 'video' as const, device: 'Camera', deviceKey: 'camera', width: 1920, height: 1080, codec: 'h264', audioCodec: 'aac', hasAudio: true, sizeBytes: 1000 };
+        const withGroup = { ...project, media: [
+            { ...mediaBase, id: 'wide', path: 'wide.mp4', recordedAt: '2026-08-05T10:00:00.000Z', durationSeconds: 20, fps: 30 },
+            { ...mediaBase, id: 'close', path: 'close.mp4', recordedAt: '2026-08-05T10:00:02.000Z', durationSeconds: 20, fps: 60 },
+            { ...mediaBase, id: 'late', path: 'late.mp4', recordedAt: '2026-08-05T10:00:30.000Z', durationSeconds: 5, fps: 30 },
+        ], groups: [{ id: 'group', name: 'Multicam 1', mediaIds: ['wide', 'close', 'late'], createdAt: '', syncStatus: 'timestamp-only' as const }] };
+
+        expect(multicamTimeline(withGroup, 'group')).toMatchObject({
+            startMs: Date.parse('2026-08-05T10:00:00.000Z'),
+            endMs: Date.parse('2026-08-05T10:00:35.000Z'),
+            fps: 60,
+        });
+        expect(multicamAnglesForRange(withGroup, 'group', 60, 600, 60)).toEqual([
+            { mediaId: 'wide', inFrame: 30, outFrame: 300, sourceFps: 30 },
+            { mediaId: 'close', inFrame: 0, outFrame: 480, sourceFps: 60 },
+        ]);
+    });
+
     it('stores course, scorecard, score and shot metadata', () => {
         let project = createProject(settings);
         const block = project.blocks.find((item) => item.hole === 1 && item.playerId === 'joe')!;
@@ -173,7 +193,7 @@ describe('project model', () => {
     it('upgrades legacy tracer tracks with render defaults', () => {
         const project = createProject(settings);
         const migrated = normalizeProject({ ...project, schemaVersion: 5, shotTracers: [{ id: 'legacy', sequenceId: 'sequence', enabled: true, impactFrame: 0, endFrame: 30, disappearFrame: 40, points: [{ frame: 0, x: 2, y: -.5 }] }] });
-        expect(migrated.schemaVersion).toBe(6);
+        expect(migrated.schemaVersion).toBe(7);
         expect(migrated.shotTracers[0]).toMatchObject({ color: '#c8ff42', thickness: 5, glow: 12, smoothing: .72, tailLength: .16, occlusionStartFrame: null, occlusionEndFrame: null, cameraLock: null });
         expect(migrated.shotTracers[0].points[0]).toMatchObject({ x: 1, y: 0 });
     });

@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import ffmpegStatic from 'ffmpeg-static';
 import { assertMediaFilesAreReadable, IpcValidationError, isTrustedAppUrl, validateExportRequest, validateProbePaths, validateProject } from './ipc-validation.js';
+import { exportMediaForSequence, exportRangeForSequence } from './multicam-export.js';
 const execFileAsync = promisify(execFile);
 const mediaExtensions = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mkv', '.wav', '.mp3', '.m4a', '.aac', '.flac']);
 const audioExtensions = new Set(['.wav', '.mp3', '.m4a', '.aac', '.flac']);
@@ -116,14 +117,6 @@ function ffmpegPath() {
     if (process.env.FFMPEG_PATH)
         return process.env.FFMPEG_PATH;
     return app.isPackaged ? ffmpegStatic.replace('app.asar', 'app.asar.unpacked') : ffmpegStatic;
-}
-
-function exportMediaForSequence(project, sequence) {
-    if (sequence.sourceType === 'media')
-        return project.media.find((media) => media.id === sequence.sourceId) ?? null;
-    const group = project.groups.find((item) => item.id === sequence.sourceId);
-    return project.media.find((media) => group?.mediaIds.includes(media.id) && media.kind === 'video')
-        ?? project.media.find((media) => group?.mediaIds.includes(media.id)) ?? null;
 }
 
 function even(value) {
@@ -406,7 +399,10 @@ function holeCardFilters(project, block, settings, videoLabel, audioLabel) {
 
 async function exportVideo(event, request) {
     const sequences = request.sequenceIds.map((id) => request.project.sequences.find((sequence) => sequence.id === id)).filter(Boolean);
-    const segments = sequences.map((sequence) => ({ sequence, media: exportMediaForSequence(request.project, sequence), block: request.project.blocks.find((block) => block.id === sequence.targetBlockId) })).filter((item) => item.media && item.block);
+    const segments = sequences.map((sequence) => {
+        const media = exportMediaForSequence(request.project, sequence);
+        return { sequence, media, range: media ? exportRangeForSequence(sequence, media) : null, block: request.project.blocks.find((block) => block.id === sequence.targetBlockId) };
+    }).filter((item) => item.media && item.range && item.block);
     if (!segments.length)
         return { canceled: false, error: 'Keine exportierbaren Sequenzen vorhanden.' };
     await assertMediaFilesAreReadable({ media: segments.map((segment) => segment.media) });
@@ -417,17 +413,17 @@ async function exportVideo(event, request) {
     const outputPath = path.extname(result.filePath) ? result.filePath : `${result.filePath}.${settings.extension}`;
     const temporaryDirectory = await fs.mkdtemp(path.join(app.getPath('temp'), 'golf-round-export-'));
     const holeChangeCount = segments.slice(0, -1).filter((item, index) => item.block.hole !== segments[index + 1].block.hole).length;
-    const totalDuration = segments.reduce((total, item) => total + (item.sequence.outFrame - item.sequence.inFrame) / item.sequence.sourceFps, 0) + holeChangeCount * 1.8;
+    const totalDuration = segments.reduce((total, item) => total + (item.range.outFrame - item.range.inFrame) / item.range.sourceFps, 0) + holeChangeCount * 1.8;
     event.sender.send('export:progress', { phase: 'preparing', percent: 0, message: `${settings.width}×${settings.height} · ${settings.fps} fps · ${settings.videoCodec}${settings.accelerated ? ' (GPU)' : ''}` });
     try {
         const args = ['-y', '-hide_banner'];
-        segments.forEach(({ sequence, media }) => {
-            args.push('-ss', (sequence.inFrame / sequence.sourceFps).toFixed(6), '-t', ((sequence.outFrame - sequence.inFrame) / sequence.sourceFps).toFixed(6), '-i', media.path);
+        segments.forEach(({ range, media }) => {
+            args.push('-ss', (range.inFrame / range.sourceFps).toFixed(6), '-t', ((range.outFrame - range.inFrame) / range.sourceFps).toFixed(6), '-i', media.path);
         });
         const graph = [];
         const concatLabels = [];
-        segments.forEach(({ sequence, media, block }, index) => {
-            const duration = (sequence.outFrame - sequence.inFrame) / sequence.sourceFps;
+        segments.forEach(({ sequence, media, range, block }, index) => {
+            const duration = (range.outFrame - range.inFrame) / range.sourceFps;
             const previousBlock = segments[index - 1]?.block;
             const nextBlock = segments[index + 1]?.block;
             const startsHole = Boolean(previousBlock && previousBlock.hole !== block.hole);
