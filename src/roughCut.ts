@@ -62,3 +62,18 @@ export function sequencePlaybackAudioSource(project: GolfProject, sequence: Virt
         gainDb: segment.gainDb,
     } : null;
 }
+
+export function sequencePreviewSource(project: GolfProject, sequence: VirtualSequence, mediaId: string): SequencePlaybackSource | null {
+    if (sequence.sourceType !== 'group') return null;
+    const group = project.groups.find((item) => item.id === sequence.sourceId);
+    const angle = sequence.multicamAngles?.find((item) => item.mediaId === mediaId);
+    const media = project.media.find((item) => item.id === mediaId && item.kind === 'video');
+    if (!group?.mediaIds.includes(mediaId) || !angle || !media) return null;
+    return {
+        media,
+        range: angle,
+        cutId: `preview-${mediaId}`,
+        momentStartSeconds: 0,
+        momentEndSeconds: (sequence.outFrame - sequence.inFrame) / sequence.sourceFps,
+    };
+}

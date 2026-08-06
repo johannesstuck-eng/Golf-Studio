@@ -19,6 +19,7 @@ Prioritäten sind Hypothesen und werden nach Tests neu bewertet.
 - [ ] Projektformat spezifizieren und Migrationstests erweitern
 - [x] kanonisches Moment-/Camera-Cut-Schema und deterministische Renderplan-Grundlage
 - [x] Filmvorschau und lokale FFmpeg-Ausgabe an denselben Renderplan anbinden
+- [x] Kameravorschau und bewusste A→B→A-Übernahme in einen sichtbaren finalen Camera Plan ermöglichen
 - [ ] Round-Builder und Golfstruktur als klaren MVP-Kernpfad validieren
 - [x] textbasierte PDF-Scorecards lokal auslesen und vor der Übernahme kontrollieren
 - [ ] Foto-/Scan-Scorecards zuverlässig erkennen

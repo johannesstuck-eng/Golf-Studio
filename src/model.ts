@@ -367,6 +367,65 @@ export function setSequenceActiveMedia(project: GolfProject, sequenceId: string,
     };
 }
 
+function mergeCameraCuts(cuts: VideoCut[]): VideoCut[] {
+    return cuts.reduce<VideoCut[]>((result, cut) => {
+        const previous = result.at(-1);
+        if (previous?.mediaId === cut.mediaId && previous.endUs === cut.startUs) {
+            previous.endUs = cut.endUs;
+            previous.origin = previous.origin === cut.origin ? previous.origin : 'mixed';
+            return result;
+        }
+        result.push({ ...cut });
+        return result;
+    }, []);
+}
+
+export function setSequenceCameraRange(project: GolfProject, sequenceId: string, mediaId: string, startUs: number, endUs: number): GolfProject {
+    const sequence = project.sequences.find((item) => item.id === sequenceId);
+    if (!sequence || sequence.sourceType !== 'group') return project;
+    const group = project.groups.find((item) => item.id === sequence.sourceId);
+    if (!group?.mediaIds.includes(mediaId) || !sequence.multicamAngles?.some((angle) => angle.mediaId === mediaId)) return project;
+    const durationUs = sequenceDurationUs(sequence);
+    const from = Math.max(0, Math.min(durationUs, Math.round(startUs)));
+    const to = Math.max(from, Math.min(durationUs, Math.round(endUs)));
+    if (to <= from) return project;
+    const existing = sequence.videoCuts ?? defaultVideoCuts(sequence, 'migrated');
+    const replacement: VideoCut = { id: id(), mediaId, startUs: from, endUs: to, origin: 'manual' };
+    const cuts = mergeCameraCuts(existing.flatMap((cut) => {
+        if (cut.endUs <= from || cut.startUs >= to) return [cut];
+        return [
+            ...(cut.startUs < from ? [{ ...cut, endUs: from }] : []),
+            replacement,
+            ...(cut.endUs > to ? [{ ...cut, id: id(), startUs: to }] : []),
+        ];
+    }).filter((cut, index, all) => cut === replacement ? all.indexOf(cut) === index : true)
+        .sort((left, right) => left.startUs - right.startUs));
+    const shotTracers = project.shotTracers.map((tracer) => {
+        if (tracer.sequenceId !== sequenceId || !tracer.binding?.mediaId) return tracer;
+        const impactUs = Math.round((tracer.impactFrame ?? 0) / sequence.sourceFps * MICROSECONDS_PER_SECOND);
+        const boundCut = cuts.find((cut) => cut.mediaId === tracer.binding?.mediaId && impactUs >= cut.startUs && impactUs < cut.endUs);
+        return boundCut ? { ...tracer, binding: { ...tracer.binding, cutId: boundCut.id } } : tracer;
+    });
+    const now = new Date().toISOString();
+    return {
+        ...project,
+        schemaVersion: 9,
+        sequences: project.sequences.map((item) => item.id === sequenceId ? { ...item, activeMediaId: mediaId, videoCuts: cuts, review: { status: 'unreviewed', reviewedFingerprint: null }, updatedAt: now } : item),
+        shotTracers,
+        modifiedAt: now,
+    };
+}
+
+export function setSequenceCameraFrom(project: GolfProject, sequenceId: string, mediaId: string, startUs: number): GolfProject {
+    const sequence = project.sequences.find((item) => item.id === sequenceId);
+    return sequence ? setSequenceCameraRange(project, sequenceId, mediaId, startUs, sequenceDurationUs(sequence)) : project;
+}
+
+export function setSequenceCameraForMoment(project: GolfProject, sequenceId: string, mediaId: string): GolfProject {
+    const sequence = project.sequences.find((item) => item.id === sequenceId);
+    return sequence ? setSequenceCameraRange(project, sequenceId, mediaId, 0, sequenceDurationUs(sequence)) : project;
+}
+
 export function removeSequence(project: GolfProject, sequenceId: string): GolfProject {
     return {
         ...project,
