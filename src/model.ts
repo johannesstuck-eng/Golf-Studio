@@ -19,6 +19,7 @@ import {
     type ShotTracerPoint,
     type VideoCut,
 } from './types';
+import { compileRenderPlan } from './renderPlan';
 
 const CORE_BLOCKS: BlockType[] = ['tee-shot', 'approach', 'greenside', 'putt'];
 const SHOT_BLOCKS = new Set<BlockType>(['tee-shot', 'approach', 'greenside', 'bunker', 'putt', 'extra-shot', 'penalty']);
@@ -424,6 +425,18 @@ export function setSequenceCameraFrom(project: GolfProject, sequenceId: string, 
 export function setSequenceCameraForMoment(project: GolfProject, sequenceId: string, mediaId: string): GolfProject {
     const sequence = project.sequences.find((item) => item.id === sequenceId);
     return sequence ? setSequenceCameraRange(project, sequenceId, mediaId, 0, sequenceDurationUs(sequence)) : project;
+}
+
+export function markSequenceReviewed(project: GolfProject, sequenceId: string, renderFingerprint: string): GolfProject {
+    if (!/^rp1-[0-9a-f]{16}$/.test(renderFingerprint) || !project.sequences.some((item) => item.id === sequenceId)) return project;
+    const currentPlan = compileRenderPlan(project, [sequenceId]);
+    if (!currentPlan.valid || currentPlan.renderFingerprint !== renderFingerprint) return project;
+    const now = new Date().toISOString();
+    return {
+        ...project,
+        sequences: project.sequences.map((item) => item.id === sequenceId ? { ...item, review: { status: 'approved', reviewedFingerprint: renderFingerprint }, updatedAt: now } : item),
+        modifiedAt: now,
+    };
 }
 
 export function removeSequence(project: GolfProject, sequenceId: string): GolfProject {

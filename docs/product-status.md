@@ -19,6 +19,8 @@ Der vorhandene Code ist deutlich weiter als ein leerer Baseline-Prototyp. Er ent
 - Round Builder mit Zuordnung nach Loch, Spieler und Schlagblock
 - lokale PDF-Scorecard-Erkennung mit Abschlagsauswahl und kontrollierter Übernahme von Par, Länge und Vorgabe
 - automatische Spielerreihenfolge und strukturierter Rohschnitt
+- Round Desk als priorisierte Arbeitszentrale für blockierende Renderfehler, offene Reviews und geprüfte Filmmomente
+- fingerprintgebundene Moment-Reviews, die nach renderrelevanten Änderungen automatisch erneut offen sind
 - framebasierte virtuelle Sequenzen, Golfblöcke und Multicam-Vorschläge
 - fester Editorial-Look mit Loch-, Score-, Spieler- und Schlaginformationen
 - manuelle Shot-Tracer-Geometrie und Kamera-Lock
