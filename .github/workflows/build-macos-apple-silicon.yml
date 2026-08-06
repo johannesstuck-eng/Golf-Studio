@@ -44,7 +44,7 @@ jobs:
         run: npm run typecheck && npm test
 
       - name: DMG und ZIP bauen
-        run: npm run dist:mac:arm64
+        run: npm run build && npx electron-builder --mac dmg zip --arm64 --publish never
 
       - name: Prüfsummen erstellen
         shell: bash
@@ -96,5 +96,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             release/*.dmg release/*.zip release/SHA256SUMS.txt \
             --prerelease \
-            --title "CUT18 macOS Preview 0.1.4" \
+            --title "CUT18 macOS Preview ${GITHUB_REF_NAME#v}" \
             --notes-file release-notes.md
