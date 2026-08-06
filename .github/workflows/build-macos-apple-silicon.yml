@@ -1,13 +1,16 @@
-name: Mac Apple Silicon Testversion
+name: Mac Apple Silicon Preview
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*-macos-preview.*"
 
 jobs:
-  build-macos-arm64:
+  build-and-publish-macos-arm64:
     runs-on: macos-14
     permissions:
-      contents: read
+      contents: write
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
@@ -20,23 +23,78 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Abhängigkeiten für Apple Silicon installieren
+      - name: Apple-Silicon-Runner bestätigen
+        run: test "$(uname -m)" = "arm64"
+
+      - name: Abhängigkeiten installieren
         run: npm ci --include=optional
 
       - name: Native Medienprogramme prüfen
+        shell: bash
         run: |
-          node -e "console.log('FFmpeg:', require('@ffmpeg-installer/ffmpeg').path)"
-          node -e "console.log('ffprobe:', require('@ffprobe-installer/ffprobe').path)"
+          FFMPEG_PATH="$(node -e "process.stdout.write(require('ffmpeg-static'))")"
+          FFPROBE_PATH="$(node -e "process.stdout.write(require('@ffprobe-installer/ffprobe').path)")"
+          file "$FFMPEG_PATH" "$FFPROBE_PATH"
+          file "$FFMPEG_PATH" | grep -q arm64
+          file "$FFPROBE_PATH" | grep -q arm64
+          "$FFMPEG_PATH" -version
+          "$FFPROBE_PATH" -version
+
+      - name: Anwendung prüfen
+        run: npm run typecheck && npm test
 
       - name: DMG und ZIP bauen
         run: npm run dist:mac:arm64
 
-      - name: Testversion bereitstellen
+      - name: Prüfsummen erstellen
+        shell: bash
+        run: |
+          cd release
+          shasum -a 256 ./*.dmg ./*.zip > SHA256SUMS.txt
+
+      - name: Build-Artefakte sichern
         uses: actions/upload-artifact@v4
         with:
           name: CUT18-macOS-Apple-Silicon
           path: |
             release/*.dmg
             release/*.zip
+            release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
+
+      - name: Öffentliche Preview veröffentlichen
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## CUT18 macOS Preview
+
+          Öffentliche Testversion des aktuellen CUT18-Entwicklungsstands für **Apple-Silicon-Macs (M1/M2/M3/M4)**.
+
+          ### Enthalten
+
+          - Golfvideo-Playbook vom Medienimport bis zum Rundenfilm
+          - automatische Multicam-Synchronisierung und Camera Plan
+          - Round Desk mit offenen Reviews und blockierenden Exportdiagnosen
+          - lokale FFmpeg-/FFprobe-Videoverarbeitung
+          - Overlays und Shot-Tracer-Prototyp
+
+          ### Wichtige Hinweise
+
+          - Preview-Software: noch keine produktive Freigabe
+          - nicht für Intel-Macs gebaut
+          - nicht mit einem Apple-Entwicklerzertifikat signiert oder notarisiert
+          - macOS kann beim ersten Start warnen; die App kann über Rechtsklick → **Öffnen** bestätigt werden
+          - keine automatische Update-Funktion
+          - Videoverarbeitung bleibt lokal auf dem Rechner
+
+          DMG und ZIP enthalten dieselbe App. `SHA256SUMS.txt` ermöglicht die Prüfung der Downloads.
+          EOF
+          gh release create "$GITHUB_REF_NAME" \
+            release/*.dmg release/*.zip release/SHA256SUMS.txt \
+            --prerelease \
+            --title "CUT18 macOS Preview 0.1.4" \
+            --notes-file release-notes.md
