@@ -17,6 +17,7 @@ Prioritäten sind Hypothesen und werden nach Tests neu bewertet.
 - [ ] lokale Wiedergabe und framegenaue Navigation validieren
 - [ ] FFmpeg/FFprobe-Erkennung und verständliche Diagnose
 - [ ] Projektformat spezifizieren und Migrationstests erweitern
+- [x] kanonisches Moment-/Camera-Cut-Schema und deterministische Renderplan-Grundlage
 - [ ] Round-Builder und Golfstruktur als klaren MVP-Kernpfad validieren
 - [x] textbasierte PDF-Scorecards lokal auslesen und vor der Übernahme kontrollieren
 - [ ] Foto-/Scan-Scorecards zuverlässig erkennen

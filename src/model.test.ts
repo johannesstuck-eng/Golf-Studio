@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, applyScorecardTee, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence } from './model';
+import { addBlock, applyScorecardTee, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
 import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
@@ -15,7 +15,7 @@ describe('project model', () => {
     it('upgrades old projects without losing media', () => {
         const old = { schemaVersion: 1, settings, media: [{ id: 'media-1' }], suggestions: [], groups: [] };
         const project = normalizeProject(old);
-        expect(project.schemaVersion).toBe(8);
+        expect(project.schemaVersion).toBe(9);
         expect(project.media).toHaveLength(1);
         expect(project.blocks).toHaveLength(36);
         expect(project.sequences).toEqual([]);
@@ -176,7 +176,7 @@ describe('project model', () => {
 
         const synced = setMulticamSyncOffset(groupProject, 'group', 'late-content', 1.5);
 
-        expect(synced.schemaVersion).toBe(8);
+        expect(synced.schemaVersion).toBe(9);
         expect(synced.groups[0]).toMatchObject({ syncStatus: 'manual', syncOffsetsSeconds: { 'late-content': 1.5 } });
         expect(synced.sequences[0].multicamAngles).toEqual([
             { mediaId: 'reference', inFrame: 60, outFrame: 300, sourceFps: 30 },
@@ -257,8 +257,105 @@ describe('project model', () => {
     it('upgrades legacy tracer tracks with render defaults', () => {
         const project = createProject(settings);
         const migrated = normalizeProject({ ...project, schemaVersion: 5, shotTracers: [{ id: 'legacy', sequenceId: 'sequence', enabled: true, impactFrame: 0, endFrame: 30, disappearFrame: 40, points: [{ frame: 0, x: 2, y: -.5 }] }] });
-        expect(migrated.schemaVersion).toBe(8);
+        expect(migrated.schemaVersion).toBe(9);
         expect(migrated.shotTracers[0]).toMatchObject({ color: '#c8ff42', thickness: 5, glow: 12, smoothing: .72, tailLength: .16, occlusionStartFrame: null, occlusionEndFrame: null, cameraLock: null });
         expect(migrated.shotTracers[0].points[0]).toMatchObject({ x: 1, y: 0 });
+    });
+
+    it('creates a complete default render plan for every new sequence', () => {
+        const project = upsertSequence(createProject(settings), {
+            sourceType: 'media', sourceId: 'camera-a', inFrame: 60, outFrame: 180,
+            sourceFps: 60, hole: 1, playerId: 'joe', blockType: 'tee-shot',
+        });
+        const sequence = project.sequences[0];
+        expect(project.schemaVersion).toBe(9);
+        expect(sequenceDurationUs(sequence)).toBe(2_000_000);
+        expect(sequence.videoCuts).toEqual([{
+            id: `${sequence.id}-cut-1`, mediaId: 'camera-a', startUs: 0, endUs: 2_000_000, origin: 'automatic',
+        }]);
+        expect(sequence.audioPlan).toEqual({ mediaId: 'camera-a', mode: 'master', offsetUs: 0, gainDb: 0, muted: false });
+        expect(sequence.review).toEqual({ status: 'unreviewed', reviewedFingerprint: null });
+        expect(videoCutPlanIsValid(sequence.videoCuts!, sequenceDurationUs(sequence))).toBe(true);
+    });
+
+    it('migrates a v8 multicam moment and tracer to the explicitly active camera', () => {
+        const base = createProject(settings);
+        const legacySequence = {
+            id: 'moment-1', sourceType: 'group' as const, sourceId: 'group-1', inFrame: 30, outFrame: 270, sourceFps: 30,
+            activeMediaId: 'camera-close', targetBlockId: base.blocks[0].id, createdAt: '', updatedAt: '',
+        };
+        const migrated = normalizeProject({
+            ...base,
+            schemaVersion: 8,
+            sequences: [legacySequence],
+            shotTracers: [{ id: 'tracer-1', sequenceId: 'moment-1', enabled: true, impactFrame: 0, endFrame: 30, disappearFrame: 40, points: [] }],
+        });
+        const cut = migrated.sequences[0].videoCuts![0];
+        expect(cut).toEqual({ id: 'moment-1-cut-1', mediaId: 'camera-close', startUs: 0, endUs: 8_000_000, origin: 'migrated' });
+        expect(migrated.sequences[0].audioPlan).toMatchObject({ mediaId: 'camera-close', mode: 'master' });
+        expect(migrated.shotTracers[0].binding).toEqual({ cutId: cut.id, mediaId: 'camera-close' });
+    });
+
+    it('keeps a v8 multicam moment without an active camera explicitly unresolved', () => {
+        const base = createProject(settings);
+        const migrated = normalizeProject({
+            ...base,
+            schemaVersion: 8,
+            sequences: [{
+                id: 'unresolved', sourceType: 'group', sourceId: 'group-1', inFrame: 0, outFrame: 60, sourceFps: 30,
+                targetBlockId: base.blocks[0].id, createdAt: '', updatedAt: '',
+            }],
+            shotTracers: [{ id: 'tracer', sequenceId: 'unresolved', enabled: true, impactFrame: 0, endFrame: 30, disappearFrame: 40, points: [] }],
+        });
+        expect(migrated.sequences[0].videoCuts![0]).toMatchObject({ mediaId: null, origin: 'migrated' });
+        expect(migrated.sequences[0].audioPlan).toMatchObject({ mediaId: null, mode: 'master' });
+        expect(migrated.shotTracers[0].binding).toEqual({ cutId: 'unresolved-cut-1', mediaId: undefined });
+    });
+
+    it('preserves valid v9 cuts and leaves a gapped plan diagnosably invalid', () => {
+        const base = createProject(settings);
+        const sequence = upsertSequence(base, {
+            sourceType: 'media', sourceId: 'wide', inFrame: 0, outFrame: 90, sourceFps: 30,
+            hole: 1, playerId: 'joe', blockType: 'tee-shot',
+        }).sequences[0];
+        const validCuts = [
+            { id: 'cut-a', mediaId: 'wide', startUs: 0, endUs: 1_000_000, origin: 'manual' as const },
+            { id: 'cut-b', mediaId: 'close', startUs: 1_000_000, endUs: 3_000_000, origin: 'manual' as const },
+        ];
+        const preserved = normalizeProject({ ...base, schemaVersion: 9, sequences: [{ ...sequence, videoCuts: validCuts }] });
+        expect(preserved.sequences[0].videoCuts).toEqual(validCuts);
+        const repaired = normalizeProject({
+            ...base,
+            schemaVersion: 9,
+            sequences: [{ ...sequence, videoCuts: [{ ...validCuts[0], endUs: 900_000 }, validCuts[1]] }],
+        });
+        expect(repaired.sequences[0].videoCuts).toEqual([
+            { ...validCuts[0], endUs: 900_000 },
+            validCuts[1],
+        ]);
+        expect(videoCutPlanIsValid(repaired.sequences[0].videoCuts!, sequenceDurationUs(repaired.sequences[0]))).toBe(false);
+        const empty = normalizeProject({ ...base, schemaVersion: 9, sequences: [{ ...sequence, videoCuts: [] }] });
+        expect(empty.sequences[0].videoCuts).toEqual([]);
+    });
+
+    it('invalidates review when source timing moves without changing duration', () => {
+        const initial = upsertSequence(createProject(settings), {
+            sourceType: 'media', sourceId: 'wide', inFrame: 0, outFrame: 90, sourceFps: 30,
+            hole: 1, playerId: 'joe', blockType: 'tee-shot',
+        });
+        const approved = {
+            ...initial,
+            sequences: initial.sequences.map((sequence) => ({
+                ...sequence,
+                review: { status: 'approved' as const, reviewedFingerprint: 'rp1-approved' },
+            })),
+        };
+        const moved = upsertSequence(approved, {
+            id: approved.sequences[0].id,
+            sourceType: 'media', sourceId: 'wide', inFrame: 30, outFrame: 120, sourceFps: 30,
+            hole: 1, playerId: 'joe', blockType: 'tee-shot', targetBlockId: approved.sequences[0].targetBlockId,
+        });
+        expect(moved.sequences[0].videoCuts).toEqual(approved.sequences[0].videoCuts);
+        expect(moved.sequences[0].review).toEqual({ status: 'unreviewed', reviewedFingerprint: null });
     });
 });

@@ -1,5 +1,6 @@
 import {
     BLOCK_TYPES,
+    type AudioPlan,
     type BlockType,
     type GolfBlock,
     type GolfProject,
@@ -16,12 +17,74 @@ import {
     type ShotDetails,
     type ShotTracerEffect,
     type ShotTracerPoint,
+    type VideoCut,
 } from './types';
 
 const CORE_BLOCKS: BlockType[] = ['tee-shot', 'approach', 'greenside', 'putt'];
 const SHOT_BLOCKS = new Set<BlockType>(['tee-shot', 'approach', 'greenside', 'bunker', 'putt', 'extra-shot', 'penalty']);
 
 const id = () => crypto.randomUUID();
+const MICROSECONDS_PER_SECOND = 1_000_000;
+
+export function sequenceDurationUs(sequence: Pick<GolfProject['sequences'][number], 'inFrame' | 'outFrame' | 'sourceFps'>): number {
+    const fps = Number.isFinite(sequence.sourceFps) && sequence.sourceFps > 0 ? sequence.sourceFps : 1;
+    return Math.max(1, Math.round(Math.max(1, sequence.outFrame - sequence.inFrame) / fps * MICROSECONDS_PER_SECOND));
+}
+
+function sequencePictureMediaId(sequence: Pick<GolfProject['sequences'][number], 'id' | 'sourceType' | 'sourceId' | 'activeMediaId'>): string | null {
+    // A missing active multicam angle stays unresolved. Guessing another camera
+    // would silently change the v8 edit during migration.
+    return sequence.sourceType === 'media' ? sequence.sourceId : sequence.activeMediaId ?? null;
+}
+
+export function defaultVideoCuts(
+    sequence: Pick<GolfProject['sequences'][number], 'id' | 'sourceType' | 'sourceId' | 'activeMediaId' | 'inFrame' | 'outFrame' | 'sourceFps'>,
+    origin: VideoCut['origin'] = 'automatic',
+): VideoCut[] {
+    return [{
+        id: `${sequence.id}-cut-1`,
+        startUs: 0,
+        endUs: sequenceDurationUs(sequence),
+        mediaId: sequencePictureMediaId(sequence),
+        origin,
+    }];
+}
+
+export function defaultAudioPlan(
+    sequence: Pick<GolfProject['sequences'][number], 'id' | 'sourceType' | 'sourceId' | 'activeMediaId'>,
+): AudioPlan {
+    return { mediaId: sequencePictureMediaId(sequence), mode: 'master', offsetUs: 0, gainDb: 0, muted: false };
+}
+
+export function videoCutPlanIsValid(cuts: VideoCut[], durationUs: number): boolean {
+    if (!cuts.length || cuts[0].startUs !== 0 || cuts.at(-1)?.endUs !== durationUs) return false;
+    return cuts.every((cut, index) => (
+        Number.isInteger(cut.startUs)
+        && Number.isInteger(cut.endUs)
+        && cut.startUs >= 0
+        && cut.endUs > cut.startUs
+        && (index === 0 || cuts[index - 1].endUs === cut.startUs)
+    ));
+}
+
+function normalizeVideoCuts(sequence: GolfProject['sequences'][number], origin: VideoCut['origin']): VideoCut[] {
+    const durationUs = sequenceDurationUs(sequence);
+    const hasStoredPlan = Array.isArray(sequence.videoCuts);
+    const cuts = hasStoredPlan ? sequence.videoCuts!.map((cut, index): VideoCut => ({
+        id: typeof cut.id === 'string' && cut.id ? cut.id : `${sequence.id}-cut-${index + 1}`,
+        mediaId: typeof cut.mediaId === 'string' && cut.mediaId ? cut.mediaId : null,
+        startUs: Math.max(0, Math.round(cut.startUs)),
+        endUs: Math.max(1, Math.round(cut.endUs)),
+        origin: cut.origin ?? origin,
+        locked: cut.locked === true ? true : undefined,
+    })) : [];
+    if (!hasStoredPlan || origin === 'migrated' && !videoCutPlanIsValid(cuts, durationUs)) {
+        return defaultVideoCuts(sequence, origin);
+    }
+    // Existing v9 plans remain inspectable even when invalid. Silently repairing
+    // a gap or overlap would hide a destructive edit and make diagnostics lie.
+    return cuts;
+}
 
 export function blockLabel(type: BlockType): string {
     return BLOCK_TYPES.find(([value]) => value === type)?.[1] ?? type;
@@ -66,7 +129,7 @@ export function createDefaultBlocks(settings: ProjectSettings): GolfBlock[] {
 
 export function createProject(settings: ProjectSettings): GolfProject {
     return {
-        schemaVersion: 8,
+        schemaVersion: 9,
         settings,
         media: [],
         suggestions: [],
@@ -107,19 +170,9 @@ export function normalizeProject(input: unknown): GolfProject {
         scorecardSourcePath: raw.courseData?.scorecardSourcePath ?? null,
         holes: defaultCourseData.holes.map((hole) => ({ ...hole, ...(rawHoles.find((item) => item.number === hole.number) ?? {}) })),
     };
-    return {
-        schemaVersion: 8,
-        settings,
-        media: Array.isArray(raw.media) ? raw.media : [],
-        suggestions: Array.isArray(raw.suggestions) ? raw.suggestions : [],
-        groups: Array.isArray(raw.groups) ? raw.groups.map((group) => ({
-            ...group,
-            syncOffsetsSeconds: Object.fromEntries(Object.entries(group.syncOffsetsSeconds ?? {})
-                .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
-                .map(([mediaId, value]) => [mediaId, Math.min(3600, Math.max(-3600, Math.round(value * 1000) / 1000))])),
-        })) : [],
-        blocks,
-        sequences: Array.isArray(raw.sequences) ? raw.sequences.map((sequence) => ({
+    const migratedFromV8 = (raw.schemaVersion ?? 0) < 9;
+    const sequences: GolfProject['sequences'] = Array.isArray(raw.sequences) ? raw.sequences.map((sequence) => {
+        const base = {
             ...sequence,
             activeMediaId: sequence.sourceType === 'group' ? sequence.activeMediaId : undefined,
             multicamAngles: sequence.sourceType === 'group' && Array.isArray(sequence.multicamAngles)
@@ -130,13 +183,42 @@ export function normalizeProject(input: unknown): GolfProject {
                     sourceFps: angle.sourceFps,
                 }))
                 : undefined,
-        })) : [],
-        overlays: Array.isArray(raw.overlays) ? raw.overlays.map((overlay) => ({
-            ...overlay,
-            position: overlay.position ?? (overlay.type === 'hole-info' ? 'top-right' : overlay.type === 'score-card' ? 'top-left' : 'bottom-left'),
-        })) : [],
-        shotTracers: Array.isArray(raw.shotTracers) ? raw.shotTracers.map((tracer) => ({
+        } as GolfProject['sequences'][number];
+        const videoCuts = normalizeVideoCuts(base, migratedFromV8 ? 'migrated' : 'automatic');
+        const rawAudio = sequence.audioPlan;
+        const fallbackAudio = defaultAudioPlan(base);
+        const audioPlan: AudioPlan = rawAudio && typeof rawAudio === 'object' ? {
+            mediaId: typeof rawAudio.mediaId === 'string' && rawAudio.mediaId ? rawAudio.mediaId : null,
+            mode: rawAudio.mode === 'follow-camera' || rawAudio.mode === 'muted' ? rawAudio.mode : 'master',
+            offsetUs: Number.isFinite(rawAudio.offsetUs) ? Math.round(rawAudio.offsetUs) : 0,
+            gainDb: Number.isFinite(rawAudio.gainDb) ? Math.min(24, Math.max(-60, rawAudio.gainDb)) : 0,
+            muted: rawAudio.muted === true || rawAudio.mode === 'muted',
+        } : fallbackAudio;
+        return {
+            ...base,
+            videoCuts,
+            audioPlan,
+            review: {
+                status: sequence.review?.status === 'approved' || sequence.review?.status === 'needs-review' ? sequence.review.status : 'unreviewed',
+                reviewedFingerprint: typeof sequence.review?.reviewedFingerprint === 'string' ? sequence.review.reviewedFingerprint : null,
+            },
+        };
+    }) : [];
+    const shotTracers: GolfProject['shotTracers'] = Array.isArray(raw.shotTracers) ? raw.shotTracers.map((tracer) => {
+        const sequence = sequences.find((item) => item.id === tracer.sequenceId);
+        const defaultCut = sequence?.videoCuts?.[0];
+        const binding = tracer.binding && typeof tracer.binding === 'object'
+            ? {
+                cutId: typeof tracer.binding.cutId === 'string' ? tracer.binding.cutId : undefined,
+                mediaId: typeof tracer.binding.mediaId === 'string' ? tracer.binding.mediaId : undefined,
+            }
+            : defaultCut ? {
+                cutId: defaultCut.id,
+                mediaId: defaultCut.mediaId ?? undefined,
+            } : undefined;
+        return {
             ...tracer,
+            binding,
             color: tracer.color ?? '#c8ff42',
             thickness: tracer.thickness ?? 5,
             glow: tracer.glow ?? 12,
@@ -151,7 +233,26 @@ export function normalizeProject(input: unknown): GolfProject {
                 y: Math.min(1, Math.max(0, point.y)),
                 kind: point.kind,
             })) : [],
+        };
+    }) : [];
+    return {
+        schemaVersion: 9,
+        settings,
+        media: Array.isArray(raw.media) ? raw.media : [],
+        suggestions: Array.isArray(raw.suggestions) ? raw.suggestions : [],
+        groups: Array.isArray(raw.groups) ? raw.groups.map((group) => ({
+            ...group,
+            syncOffsetsSeconds: Object.fromEntries(Object.entries(group.syncOffsetsSeconds ?? {})
+                .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+                .map(([mediaId, value]) => [mediaId, Math.min(3600, Math.max(-3600, Math.round(value * 1000) / 1000))])),
         })) : [],
+        blocks,
+        sequences,
+        overlays: Array.isArray(raw.overlays) ? raw.overlays.map((overlay) => ({
+            ...overlay,
+            position: overlay.position ?? (overlay.type === 'hole-info' ? 'top-right' : overlay.type === 'score-card' ? 'top-left' : 'bottom-left'),
+        })) : [],
+        shotTracers,
         playerOrders: Array.isArray(raw.playerOrders) ? raw.playerOrders : [],
         courseData,
         playerScores: Array.isArray(raw.playerScores) ? raw.playerScores : [],
@@ -194,7 +295,7 @@ export function upsertSequence(project: GolfProject, draft: SequenceDraft): Golf
             ? [...new Set([...block.sequenceIds, sequenceId])]
             : block.sequenceIds.filter((value) => value !== sequenceId),
     }));
-    const sequence = {
+    const sequenceBase = {
         id: sequenceId,
         sourceType: draft.sourceType,
         sourceId: draft.sourceId,
@@ -207,9 +308,27 @@ export function upsertSequence(project: GolfProject, draft: SequenceDraft): Golf
         createdAt: oldSequence?.createdAt ?? now,
         updatedAt: now,
     };
+    const cutShapeCompatible = oldSequence
+        && oldSequence.sourceType === sequenceBase.sourceType
+        && oldSequence.sourceId === sequenceBase.sourceId
+        && sequenceDurationUs(oldSequence) === sequenceDurationUs(sequenceBase);
+    const renderSourceUnchanged = cutShapeCompatible
+        && oldSequence.inFrame === sequenceBase.inFrame
+        && oldSequence.outFrame === sequenceBase.outFrame
+        && oldSequence.sourceFps === sequenceBase.sourceFps
+        && JSON.stringify(oldSequence.multicamAngles ?? []) === JSON.stringify(sequenceBase.multicamAngles ?? []);
+    const existingCuts = cutShapeCompatible && videoCutPlanIsValid(oldSequence.videoCuts ?? [], sequenceDurationUs(sequenceBase))
+        ? oldSequence.videoCuts
+        : undefined;
+    const sequence: GolfProject['sequences'][number] = {
+        ...sequenceBase,
+        videoCuts: existingCuts ?? defaultVideoCuts(sequenceBase),
+        audioPlan: cutShapeCompatible && oldSequence.audioPlan ? oldSequence.audioPlan : defaultAudioPlan(sequenceBase),
+        review: renderSourceUnchanged && oldSequence.review ? oldSequence.review : { status: 'unreviewed', reviewedFingerprint: null },
+    };
     return {
         ...project,
-        schemaVersion: 8,
+        schemaVersion: 9,
         blocks,
         sequences: oldSequence
             ? project.sequences.map((item) => item.id === sequenceId ? sequence : item)
@@ -227,9 +346,23 @@ export function setSequenceActiveMedia(project: GolfProject, sequenceId: string,
     if (!group?.mediaIds.includes(mediaId) || !angle || media?.kind !== 'video') return project;
     return {
         ...project,
-        sequences: project.sequences.map((item) => item.id === sequenceId
-            ? { ...item, activeMediaId: mediaId, updatedAt: new Date().toISOString() }
-            : item),
+        sequences: project.sequences.map((item) => {
+            if (item.id !== sequenceId) return item;
+            const durationUs = sequenceDurationUs(item);
+            const currentCuts = item.videoCuts ?? defaultVideoCuts(item, 'migrated');
+            const isSingleDefaultCut = currentCuts.length === 1
+                && currentCuts[0].startUs === 0
+                && currentCuts[0].endUs === durationUs
+                && !currentCuts[0].locked;
+            const videoCuts = isSingleDefaultCut
+                ? [{ ...currentCuts[0], mediaId, origin: 'manual' as const }]
+                : currentCuts;
+            const currentAudioPlan = item.audioPlan ?? defaultAudioPlan(item);
+            const audioPlan = currentAudioPlan.mode === 'follow-camera'
+                ? { ...currentAudioPlan, mediaId }
+                : currentAudioPlan;
+            return { ...item, activeMediaId: mediaId, videoCuts, audioPlan, review: { status: 'unreviewed', reviewedFingerprint: null }, updatedAt: new Date().toISOString() };
+        }),
         modifiedAt: new Date().toISOString(),
     };
 }
@@ -363,7 +496,7 @@ export function toggleSequenceOverlay(project: GolfProject, sequenceId: string, 
             endFrame: sequence.outFrame - sequence.inFrame,
             position: type === 'hole-info' ? 'top-right' as const : type === 'score-card' ? 'top-left' as const : 'bottom-left' as const,
         }];
-    return { ...project, schemaVersion: 8, overlays, modifiedAt: new Date().toISOString() };
+    return { ...project, schemaVersion: 9, overlays, modifiedAt: new Date().toISOString() };
 }
 
 function defaultShotTracer(sequence: GolfProject['sequences'][number]): ShotTracerEffect {
@@ -371,6 +504,7 @@ function defaultShotTracer(sequence: GolfProject['sequences'][number]): ShotTrac
     const endFrame = Math.max(1, Math.round(duration * 0.78));
     return {
         id: id(), sequenceId: sequence.id, enabled: true,
+        binding: { cutId: sequence.videoCuts?.[0]?.id, mediaId: sequence.videoCuts?.[0]?.mediaId ?? undefined },
         impactFrame: 0, endFrame, disappearFrame: duration,
         points: [
             { frame: 0, x: 0.32, y: 0.76, kind: 'impact' },
@@ -390,7 +524,7 @@ export function toggleShotTracer(project: GolfProject, sequenceId: string): Golf
     const shotTracers = existing
         ? project.shotTracers.map((tracer) => tracer.id === existing.id ? { ...tracer, enabled: !tracer.enabled } : tracer)
         : [...project.shotTracers, defaultShotTracer(sequence)];
-    return { ...project, schemaVersion: 8, shotTracers, modifiedAt: new Date().toISOString() };
+    return { ...project, schemaVersion: 9, shotTracers, modifiedAt: new Date().toISOString() };
 }
 
 export function updateShotTracer(project: GolfProject, sequenceId: string, patch: Partial<Omit<ShotTracerEffect, 'id' | 'sequenceId'>>): GolfProject {
@@ -418,7 +552,7 @@ export function updateShotTracer(project: GolfProject, sequenceId: string, patch
     };
     return {
         ...project,
-        schemaVersion: 8,
+        schemaVersion: 9,
         shotTracers: project.shotTracers.map((item) => item.id === tracer.id ? updated : item),
         modifiedAt: new Date().toISOString(),
     };
@@ -602,7 +736,7 @@ export function movePlayerInOrder(project: GolfProject, hole: number, blockOrder
     const playerOrders = exists
         ? project.playerOrders.map((order) => order.hole === hole && order.blockOrder === blockOrder ? { ...order, playerIds } : order)
         : [...project.playerOrders, { hole, blockOrder, playerIds }];
-    return { ...project, schemaVersion: 8, playerOrders, modifiedAt: new Date().toISOString() };
+    return { ...project, schemaVersion: 9, playerOrders, modifiedAt: new Date().toISOString() };
 }
 
 const start = (media: MediaItem) => Date.parse(media.recordedAt);
@@ -664,7 +798,7 @@ export function setMulticamSyncOffsets(project: GolfProject, groupId: string, of
         syncStatus,
         syncOffsetsSeconds: { ...(item.syncOffsetsSeconds ?? {}), ...validOffsets },
     } : item);
-    const next = { ...project, schemaVersion: 8, groups, modifiedAt: now };
+    const next = { ...project, schemaVersion: 9, groups, modifiedAt: now };
     return {
         ...next,
         sequences: next.sequences.map((sequence) => sequence.sourceType === 'group' && sequence.sourceId === groupId ? {
