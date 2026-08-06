@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { createProject } from './model';
+import { createProject, markSequenceReviewed } from './model';
 import { firstSequenceForHole, holeStoryStatus, summarizeRoundDesk } from './roundDesk';
+import { compileRenderPlan } from './renderPlan';
 import type { GolfProject, VirtualSequence } from './types';
 
 function project(): GolfProject {
@@ -59,5 +60,34 @@ describe('round desk summaries', () => {
         };
         expect(firstSequenceForHole(populated, 1)).toBe('first');
         expect(firstSequenceForHole(populated, 18)).toBeUndefined();
+    });
+
+    it('prioritizes real render blockers and counts only fingerprint-matched reviews as checked', () => {
+        const base = project();
+        const block = base.blocks.find((item) => item.hole === 1)!;
+        const clip = { ...sequence('shot', block.id), videoCuts: [{ id: 'cut', mediaId: 'media-1', startUs: 0, endUs: 10_000_000, origin: 'manual' as const }], audioPlan: { mediaId: null, mode: 'muted' as const, offsetUs: 0, gainDb: 0, muted: true } };
+        const populated: GolfProject = {
+            ...base,
+            media: [{ id: 'media-1', name: 'shot.mp4', path: 'C:\\shot.mp4', kind: 'video', device: 'Camera', deviceKey: 'camera', recordedAt: '', durationSeconds: 30, width: 1920, height: 1080, fps: 60, codec: 'h264', audioCodec: 'aac', hasAudio: true, sizeBytes: 1 }],
+            sequences: [clip],
+            blocks: base.blocks.map((item) => item.id === block.id ? { ...item, sequenceIds: [clip.id] } : item),
+        };
+        const pending = summarizeRoundDesk(populated);
+        expect(pending.holes[0]).toMatchObject({ productionStatus: 'needs-review', unreviewedSequenceCount: 1, blockingIssueCount: 0, nextSequenceId: 'shot' });
+        expect(pending).toMatchObject({ productionProgress: 0, nextHole: 1, nextSequenceId: 'shot' });
+
+        const fingerprint = compileRenderPlan(populated, ['shot']).renderFingerprint;
+        expect(markSequenceReviewed(populated, 'shot', 'rp1-0000000000000000')).toBe(populated);
+        const reviewed = markSequenceReviewed(populated, 'shot', fingerprint);
+        const ready = summarizeRoundDesk(reviewed);
+        expect(ready.holes[0]).toMatchObject({ productionStatus: 'ready', reviewedSequenceCount: 1 });
+        expect(ready.productionProgress).toBe(100);
+        expect(ready.nextSequenceId).toBeUndefined();
+
+        const broken = { ...reviewed, media: [] };
+        const blocked = summarizeRoundDesk(broken);
+        expect(blocked.holes[0].productionStatus).toBe('blocked');
+        expect(blocked.blockingIssueCount).toBeGreaterThan(0);
+        expect(blocked.nextSequenceId).toBe('shot');
     });
 });
