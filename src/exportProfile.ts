@@ -1,4 +1,6 @@
-import type { ExportProfileId, GolfProject, MediaItem, VirtualSequence } from './types';
+import type { ExportProfileId, GolfProject, MediaItem } from './types';
+import { compileRenderPlan } from './renderPlan';
+import type { RenderDiagnostic } from './renderPlan';
 
 export interface ExportSummary {
     sequenceCount: number;
@@ -11,20 +13,15 @@ export interface ExportSummary {
     container: 'MP4' | 'MOV' | 'MKV';
     videoCodec: 'H.264' | 'H.265/HEVC' | 'ProRes 422 HQ' | 'FFV1 Lossless';
     qualityLabel: string;
-}
-
-function mediaForSequence(project: GolfProject, sequence: VirtualSequence): MediaItem | undefined {
-    if (sequence.sourceType === 'media') return project.media.find((media) => media.id === sequence.sourceId);
-    const group = project.groups.find((candidate) => candidate.id === sequence.sourceId);
-    return project.media.find((media) => group?.mediaIds.includes(media.id) && media.kind === 'video')
-        ?? project.media.find((media) => group?.mediaIds.includes(media.id));
+    renderFingerprint: string;
+    valid: boolean;
+    diagnostics: RenderDiagnostic[];
 }
 
 export function buildExportSummary(project: GolfProject, sequenceIds: string[], profile: ExportProfileId): ExportSummary {
-    const sequences = sequenceIds
-        .map((id) => project.sequences.find((sequence) => sequence.id === id))
-        .filter((sequence): sequence is VirtualSequence => Boolean(sequence));
-    const media = sequences.map((sequence) => mediaForSequence(project, sequence)).filter((item): item is MediaItem => Boolean(item));
+    const plan = compileRenderPlan(project, sequenceIds);
+    const selectedMediaIds = new Set(plan.videoSegments.map((segment) => segment.mediaId));
+    const media = project.media.filter((item): item is MediaItem => selectedMediaIds.has(item.id));
     const video = media.filter((item) => item.kind === 'video');
     const codecs = [...new Set(video.map((item) => item.codec.toLowerCase()))];
     const width = Math.max(2, ...video.map((item) => item.width ?? 0));
@@ -51,8 +48,8 @@ export function buildExportSummary(project: GolfProject, sequenceIds: string[], 
     }
 
     return {
-        sequenceCount: sequences.length,
-        durationSeconds: sequences.reduce((total, sequence) => total + Math.max(0, sequence.outFrame - sequence.inFrame) / sequence.sourceFps, 0),
+        sequenceCount: plan.moments.length,
+        durationSeconds: plan.totalDurationUs / 1_000_000,
         width,
         height,
         fps,
@@ -61,5 +58,8 @@ export function buildExportSummary(project: GolfProject, sequenceIds: string[], 
         container,
         videoCodec,
         qualityLabel,
+        renderFingerprint: plan.renderFingerprint,
+        valid: plan.valid,
+        diagnostics: plan.diagnostics,
     };
 }

@@ -1,6 +1,6 @@
 # Architektur
 
-Die verbindliche Produkt- und Schnittlogik ist in [editing-workflow.md](editing-workflow.md) beschrieben. Seit Schema 9 wird der filmische Zustand als Golf-Momente mit Camera Cuts, unabhängigem Audio-Plan und winkelgebundenen Effekten modelliert. Ein rendererunabhängiger Compiler unter `shared/render-plan.mjs` bildet daraus den kanonischen Renderplan und strukturierte Diagnosen; Vorschau, Exportzusammenfassung und FFmpeg-Export werden schrittweise auf genau diesen Vertrag umgestellt.
+Die verbindliche Produkt- und Schnittlogik ist in [editing-workflow.md](editing-workflow.md) beschrieben. Seit Schema 9 wird der filmische Zustand als Golf-Momente mit Camera Cuts, unabhängigem Audio-Plan und winkelgebundenen Effekten modelliert. Ein rendererunabhängiger Compiler unter `shared/render-plan.mjs` bildet daraus den kanonischen Renderplan und strukturierte Diagnosen. Filmvorschau, Exportzusammenfassung und FFmpeg-Export konsumieren diesen gemeinsamen Vertrag; ungültige Pläne blockieren die Ausgabe und lösen keinen stillen Kamera-Fallback aus.
 
 ## Entscheidung
 

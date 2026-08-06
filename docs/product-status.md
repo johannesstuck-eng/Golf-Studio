@@ -13,6 +13,8 @@ Der vorhandene Code ist deutlich weiter als ein leerer Baseline-Prototyp. Er ent
 - `.golfcut`-Projektmodell mit Schema-Migration
 - kanonisches Moment-, Kamera-, Ton- und Effektmodell als Grundlage für identische Vorschau und Ausgabe
 - deterministischer Renderplan mit strukturierten Warnungen und blockierenden Diagnosen
+- renderplangesteuerte A→B→A-Filmvorschau mit unabhängigem Hauptton
+- FFmpeg-Ausgabe derselben Kamera-, Ton- und kameragebundenen Tracer-Entscheidungen
 - Round Builder mit Zuordnung nach Loch, Spieler und Schlagblock
 - lokale PDF-Scorecard-Erkennung mit Abschlagsauswahl und kontrollierter Übernahme von Par, Länge und Vorgabe
 - automatische Spielerreihenfolge und strukturierter Rohschnitt

@@ -67,6 +67,26 @@ test('compiles an A to B to A camera cut in deterministic film order', () => {
     ]);
 });
 
+test('keeps equal 59.94 fps frame ranges aligned without a one-microsecond coverage error', () => {
+    const project = multicamProject({
+        sequence: {
+            durationUs: undefined,
+            inFrame: 6752,
+            outFrame: 7128,
+            sourceFps: 59.94,
+            activeMediaId: 'camera-b',
+            videoCuts: undefined,
+            audioPlan: { mode: 'muted' },
+            multicamAngles: [{ mediaId: 'camera-b', inFrame: 6125, outFrame: 6501, sourceFps: 59.94 }],
+        },
+        project: { media: [media('camera-a', { durationSeconds: 300 }), media('camera-b', { durationSeconds: 300 })] },
+    });
+    const plan = compileRenderPlan(project, ['moment-1']);
+    assert.equal(plan.valid, true);
+    assert.equal(plan.videoSegments.length, 1);
+    assert.equal(plan.videoSegments[0].mediaId, 'camera-b');
+});
+
 test('produces byte-for-byte deterministic preview and export plans from unordered cuts', () => {
     const project = multicamProject();
     project.sequences[0].videoCuts = [...project.sequences[0].videoCuts].reverse();

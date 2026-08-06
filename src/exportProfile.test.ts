@@ -35,4 +35,20 @@ describe('buildExportSummary', () => {
         const project = projectWith('hevc', 'mov', 12);
         expect(buildExportSummary(project, roughCutSequenceIds(project), 'source-matched')).toMatchObject({ container: 'MKV', videoCodec: 'FFV1 Lossless', bitDepth: 12 });
     });
+
+    it('summarizes only cameras committed to the canonical render plan', () => {
+        const project = projectWith('h264', 'mp4');
+        project.media.push({ ...project.media[0], id: 'm2', path: 'C:\\Clips\\unused.mov', codec: 'hevc' });
+        const summary = buildExportSummary(project, roughCutSequenceIds(project), 'source-matched');
+        expect(summary).toMatchObject({ valid: true, sourceCodecs: ['h264'], durationSeconds: 10 });
+        expect(summary.renderFingerprint).toMatch(/^rp1-/);
+    });
+
+    it('exposes blocking render diagnostics instead of pretending export is ready', () => {
+        const project = projectWith('h264', 'mp4');
+        project.sequences[0].videoCuts = [];
+        const summary = buildExportSummary(project, roughCutSequenceIds(project), 'source-matched');
+        expect(summary.valid).toBe(false);
+        expect(summary.diagnostics.some((item) => item.code === 'VIDEO_CUTS_EMPTY')).toBe(true);
+    });
 });

@@ -39,9 +39,8 @@ function sequenceDurationUs(sequence) {
     if (finite(sequence.masterInUs) && finite(sequence.masterOutUs)) {
         return Math.max(0, Math.round(sequence.masterOutUs - sequence.masterInUs));
     }
-    const start = frameToUs(sequence.inFrame, sequence.sourceFps);
-    const end = frameToUs(sequence.outFrame, sequence.sourceFps);
-    return start === null || end === null ? null : Math.max(0, end - start);
+    const duration = frameToUs(sequence.outFrame - sequence.inFrame, sequence.sourceFps);
+    return duration === null ? null : Math.max(0, duration);
 }
 
 function legacyFullCut(sequence, durationUs) {
@@ -93,7 +92,9 @@ function normalizedCuts(sequence, durationUs, diagnostics) {
 function angleRange(angle, durationUs) {
     const fps = finite(angle?.sourceFps) && angle.sourceFps > 0 ? angle.sourceFps : null;
     const sourceStartUs = integerUs(angle?.sourceStartUs ?? angle?.inUs) ?? frameToUs(angle?.inFrame, fps);
-    const sourceEndUs = integerUs(angle?.sourceEndUs ?? angle?.outUs) ?? frameToUs(angle?.outFrame, fps);
+    const frameDurationUs = frameToUs(angle?.outFrame - angle?.inFrame, fps);
+    const sourceEndUs = integerUs(angle?.sourceEndUs ?? angle?.outUs)
+        ?? (sourceStartUs === null || frameDurationUs === null ? null : sourceStartUs + frameDurationUs);
     if (sourceStartUs === null || sourceEndUs === null || sourceEndUs <= sourceStartUs) return null;
     const explicitMomentStart = integerUs(angle?.momentStartUs);
     const explicitMomentEnd = integerUs(angle?.momentEndUs);
