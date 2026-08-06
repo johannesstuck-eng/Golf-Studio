@@ -101,8 +101,18 @@ jobs:
 
           DMG und ZIP enthalten dieselbe App. `SHA256SUMS.txt` ermöglicht die Prüfung der Downloads.
           EOF
-          gh release create "$RELEASE_TAG" \
-            release/*.dmg release/*.zip release/SHA256SUMS.txt \
-            --prerelease \
-            --title "CUT18 macOS Preview ${RELEASE_TAG#v}" \
-            --notes-file release-notes.md
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" \
+              release/*.dmg release/*.zip release/SHA256SUMS.txt \
+              --clobber
+            gh release edit "$RELEASE_TAG" \
+              --prerelease \
+              --title "CUT18 macOS Preview ${RELEASE_TAG#v}" \
+              --notes-file release-notes.md
+          else
+            gh release create "$RELEASE_TAG" \
+              release/*.dmg release/*.zip release/SHA256SUMS.txt \
+              --prerelease \
+              --title "CUT18 macOS Preview ${RELEASE_TAG#v}" \
+              --notes-file release-notes.md
+          fi
