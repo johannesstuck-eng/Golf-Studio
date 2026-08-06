@@ -9,7 +9,8 @@ import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import ffmpegStatic from 'ffmpeg-static';
 import { assertMediaFilesAreReadable, IpcValidationError, isTrustedAppUrl, validateExportRequest, validateMulticamSyncRequest, validateProbePaths, validateProject } from './ipc-validation.js';
 import { createMediaChooseHandler, createMediaEngineDiagnostics, MediaEngineError, publicMediaEngineStatus, resolveMediaEnginePaths, validateDiagnosticsForce } from './media-engine.js';
-import { exportMediaForSequence, exportRangeForSequence } from './multicam-export.js';
+import { prepareRenderPlanExport, RenderPlanExportError } from './render-plan-export.js';
+import { buildRenderPlanGraph, renderPlanInputArguments } from './render-plan-graph.js';
 import { alignAudioTracks, compactWaveform, pcm16Envelope } from './audio-sync.js';
 import { tracerFrameAtProgress } from './tracer-timing.js';
 import { analyzeScorecard } from './scorecard-analysis.js';
@@ -306,7 +307,7 @@ function cameraLockPointAtFrame(lock, point, frame) {
     return { x: point.x + (target.x - point.x) * progress, y: point.y + (target.y - point.y) * progress };
 }
 
-function tracerFilters(tracer, settings, sourceFps) {
+function tracerFilters(tracer, settings, sourceFps, timeOffsetSeconds = 0) {
     if (!tracer?.enabled || tracer.points.length < 2)
         return [];
     const count = settings.width >= 3000 ? 180 : 140;
@@ -333,9 +334,9 @@ function tracerFilters(tracer, settings, sourceFps) {
             const intervalStop = visibleAt + (intervalEnd - visibleAt) * (interval + 1) / intervalCount;
             const sampleFrame = (intervalStart + intervalStop) * .5 * sourceFps;
             const screenPoint = cameraLockPointAtFrame(tracer.cameraLock, point, sampleFrame);
-            const visible = `between(t\\,${intervalStart.toFixed(5)}\\,${intervalStop.toFixed(5)})`;
+            const visible = `between(t\\,${(intervalStart - timeOffsetSeconds).toFixed(5)}\\,${(intervalStop - timeOffsetSeconds).toFixed(5)})`;
             const occlusionCut = index === count - 1 ? occlusionEnd - .5 / sourceFps : occlusionEnd + .5 / sourceFps;
-            const occlusion = hasOcclusion ? `*not(between(t\\,${(occlusionStart + .5 / sourceFps).toFixed(5)}\\,${occlusionCut.toFixed(5)}))` : '';
+            const occlusion = hasOcclusion ? `*not(between(t\\,${(occlusionStart + .5 / sourceFps - timeOffsetSeconds).toFixed(5)}\\,${(occlusionCut - timeOffsetSeconds).toFixed(5)}))` : '';
             const enable = `${visible}${occlusion}`;
             const x = Math.round(screenPoint.x * settings.width);
             const y = Math.round(screenPoint.y * settings.height);
@@ -346,14 +347,14 @@ function tracerFilters(tracer, settings, sourceFps) {
     return filters;
 }
 
-function overlayFilters(project, sequence, block, settings) {
+function overlayFilters(project, sequence, block, settings, timeOffsetSeconds = 0) {
     const overlays = project.overlays.filter((overlay) => overlay.sequenceId === sequence.id && overlay.enabled);
     const player = project.settings.players.find((item) => item.id === block.playerId);
     const hole = project.courseData?.holes?.find((item) => item.number === block.hole);
     const font = overlayFontPath();
     return overlays.flatMap((overlay) => {
-        const start = overlay.startFrame / sequence.sourceFps;
-        const end = overlay.endFrame / sequence.sourceFps;
+        const start = overlay.startFrame / sequence.sourceFps - timeOffsetSeconds;
+        const end = overlay.endFrame / sequence.sourceFps - timeOffsetSeconds;
         const enable = `between(t\\,${start.toFixed(5)}\\,${end.toFixed(5)})`;
         const boxWidth = Math.round(settings.width * (overlay.type === 'player-card' ? .34 : .25));
         const boxHeight = Math.round(settings.height * .105);
@@ -389,7 +390,7 @@ function playerScoreBeforeHole(project, playerId, hole) {
     return total === 0 ? 'E' : total > 0 ? `+${total}` : String(total);
 }
 
-function fixedEditorialFilters(project, sequence, block, settings) {
+function fixedEditorialFilters(project, sequence, block, settings, timeOffsetSeconds = 0, segmentDuration = (sequence.outFrame - sequence.inFrame) / sequence.sourceFps) {
     const player = project.settings.players.find((item) => item.id === block.playerId);
     const hole = project.courseData?.holes?.find((item) => item.number === block.hole);
     const font = overlayFontPath();
@@ -417,8 +418,9 @@ function fixedEditorialFilters(project, sequence, block, settings) {
         const shotHeight = Math.round(settings.height * .075);
         const shotX = settings.width - Math.round(settings.width * .035) - shotWidth;
         const shotY = settings.height - Math.round(settings.height * .06) - shotHeight;
-        const visibleEnd = Math.min(2.6, (sequence.outFrame - sequence.inFrame) / sequence.sourceFps).toFixed(4);
+        const visibleEnd = Math.min(segmentDuration, 2.6 - timeOffsetSeconds).toFixed(4);
         const enable = `between(t\\,0\\,${visibleEnd})`;
+        if (Number(visibleEnd) <= 0) return filters;
         filters.push(
             `drawbox=x=${shotX}:y=${shotY}:w=${shotWidth}:h=${shotHeight}:color=0x0b100d@0.88:t=fill:enable='${enable}'`,
             `drawbox=x=${shotX + shotWidth - accent}:y=${shotY}:w=${accent}:h=${shotHeight}:color=0xc8ff42@1:t=fill:enable='${enable}'`,
@@ -443,65 +445,43 @@ function holeCardFilters(project, block, settings, videoLabel, audioLabel) {
 
 async function exportVideo(event, request) {
     const ffmpeg = await mediaEngine.require('ffmpeg');
-    const sequences = request.sequenceIds.map((id) => request.project.sequences.find((sequence) => sequence.id === id)).filter(Boolean);
-    const segments = sequences.map((sequence) => {
-        const media = exportMediaForSequence(request.project, sequence);
-        return { sequence, media, range: media ? exportRangeForSequence(sequence, media) : null, block: request.project.blocks.find((block) => block.id === sequence.targetBlockId) };
-    }).filter((item) => item.media && item.range && item.block);
-    if (!segments.length)
-        return { canceled: false, error: 'Keine exportierbaren Sequenzen vorhanden.' };
-    await assertMediaFilesAreReadable({ media: segments.map((segment) => segment.media) });
-    const settings = await acceleratedExportSettings(sourceExportSettings(request, segments));
+    let prepared;
+    try {
+        prepared = prepareRenderPlanExport(request.project, request.sequenceIds);
+    }
+    catch (error) {
+        const message = error instanceof RenderPlanExportError ? error.message : 'Der Renderplan konnte nicht erstellt werden.';
+        return { canceled: false, error: message };
+    }
+    if (!prepared.moments.length)
+        return { canceled: false, error: 'Keine exportierbaren Golf-Momente vorhanden.' };
+    const usedMedia = [...new Map([...prepared.videoSegments, ...prepared.audioSegments].map((segment) => [segment.media.id, segment.media])).values()];
+    await assertMediaFilesAreReadable({ media: usedMedia });
+    const settings = await acceleratedExportSettings(sourceExportSettings(request, prepared.videoSegments));
     const result = await dialog.showSaveDialog({ title: 'Golfrunde exportieren', defaultPath: `${request.project.settings.course || 'Golfrunde'}.${settings.extension}`, filters: [{ name: request.profile === 'lossless-master' ? 'Verlustfreier Master' : 'Quellgetreuer Videoexport', extensions: [settings.extension] }] });
     if (result.canceled || !result.filePath)
         return { canceled: true };
     const outputPath = path.extname(result.filePath) ? result.filePath : `${result.filePath}.${settings.extension}`;
     const temporaryDirectory = await fs.mkdtemp(path.join(app.getPath('temp'), 'golf-round-export-'));
-    const holeChangeCount = segments.slice(0, -1).filter((item, index) => item.block.hole !== segments[index + 1].block.hole).length;
-    const totalDuration = segments.reduce((total, item) => total + (item.range.outFrame - item.range.inFrame) / item.range.sourceFps, 0) + holeChangeCount * 1.8;
+    const holeChangeCount = prepared.moments.slice(0, -1).filter((item, index) => item.block.hole !== prepared.moments[index + 1].block.hole).length;
+    const totalDuration = prepared.plan.totalDurationUs / 1_000_000 + holeChangeCount * 1.8;
     event.sender.send('export:progress', { phase: 'preparing', percent: 0, message: `${settings.width}×${settings.height} · ${settings.fps} fps · ${settings.videoCodec}${settings.accelerated ? ' (GPU)' : ''}` });
     try {
-        const args = ['-y', '-hide_banner'];
-        segments.forEach(({ range, media }) => {
-            args.push('-ss', (range.inFrame / range.sourceFps).toFixed(6), '-t', ((range.outFrame - range.inFrame) / range.sourceFps).toFixed(6), '-i', media.path);
+        const args = ['-y', '-hide_banner', ...renderPlanInputArguments(prepared)];
+        const graph = buildRenderPlanGraph(prepared, settings, {
+            videoFilters: ({ segment, moment, segmentIndex, startsHole, endsHole, duration }) => {
+                const offset = segment.startUs / 1_000_000;
+                const dip = Math.min(duration / 2, 10 / settings.fps);
+                return [
+                    ...segment.tracerPlacements.flatMap((placement) => tracerFilters(placement.effect, settings, moment.sequence.sourceFps, offset)),
+                    ...fixedEditorialFilters(request.project, moment.sequence, moment.block, settings, offset, duration),
+                    ...overlayFilters(request.project, moment.sequence, moment.block, settings, offset),
+                    ...(startsHole && segmentIndex === 0 ? [`fade=t=in:st=0:d=${dip.toFixed(6)}`] : []),
+                    ...(endsHole && segmentIndex === moment.videoSegments.length - 1 ? [`fade=t=out:st=${Math.max(0, duration - dip).toFixed(6)}:d=${dip.toFixed(6)}`] : []),
+                ];
+            },
+            holeCard: ({ nextBlock, videoLabel, audioLabel }) => holeCardFilters(request.project, nextBlock, settings, videoLabel, audioLabel),
         });
-        const graph = [];
-        const concatLabels = [];
-        segments.forEach(({ sequence, media, range, block }, index) => {
-            const duration = (range.outFrame - range.inFrame) / range.sourceFps;
-            const previousBlock = segments[index - 1]?.block;
-            const nextBlock = segments[index + 1]?.block;
-            const startsHole = Boolean(previousBlock && previousBlock.hole !== block.hole);
-            const endsHole = Boolean(nextBlock && nextBlock.hole !== block.hole);
-            const dip = Math.min(duration / 2, 10 / settings.fps);
-            const videoFilters = [
-                ...tracerFilters(request.project.shotTracers.find((tracer) => tracer.sequenceId === sequence.id), settings, sequence.sourceFps),
-                ...fixedEditorialFilters(request.project, sequence, block, settings),
-                ...(startsHole ? [`fade=t=in:st=0:d=${dip.toFixed(6)}`] : []),
-                ...(endsHole ? [`fade=t=out:st=${Math.max(0, duration - dip).toFixed(6)}:d=${dip.toFixed(6)}`] : []),
-                `format=pix_fmts=${settings.pixelFormat}`,
-            ];
-            const visual = media.kind === 'video'
-                ? [`[${index}:v]scale=${settings.width}:${settings.height}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${settings.width}:${settings.height}:(ow-iw)/2:(oh-ih)/2:color=black,fps=${settings.fps},setsar=1,setpts=PTS-STARTPTS`, ...videoFilters].join(',') + `[v${index}]`
-                : [`color=c=black:s=${settings.width}x${settings.height}:r=${settings.fps}:d=${duration.toFixed(6)}`, ...fixedEditorialFilters(request.project, sequence, block, settings), ...(startsHole ? [`fade=t=in:st=0:d=${dip.toFixed(6)}`] : []), ...(endsHole ? [`fade=t=out:st=${Math.max(0, duration - dip).toFixed(6)}:d=${dip.toFixed(6)}`] : []), `format=pix_fmts=${settings.pixelFormat}`].join(',') + `[v${index}]`;
-            graph.push(visual);
-            const audioFade = Math.min(duration / 3, 6 / settings.fps);
-            const audioFilters = [
-                ...(index > 0 ? [`afade=t=in:st=0:d=${audioFade.toFixed(6)}`] : []),
-                ...(index < segments.length - 1 ? [`afade=t=out:st=${Math.max(0, duration - audioFade).toFixed(6)}:d=${audioFade.toFixed(6)}`] : []),
-                'aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo',
-            ];
-            graph.push(media.hasAudio || media.kind === 'audio'
-                ? [`[${index}:a]aresample=48000,apad,atrim=duration=${duration.toFixed(6)},asetpts=PTS-STARTPTS`, ...audioFilters].join(',') + `[a${index}]`
-                : [`anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${duration.toFixed(6)}`, ...audioFilters].join(',') + `[a${index}]`);
-            concatLabels.push(`[v${index}][a${index}]`);
-            if (endsHole && nextBlock) {
-                const card = holeCardFilters(request.project, nextBlock, settings, `vh${index}`, `ah${index}`);
-                graph.push(card.video, card.audio);
-                concatLabels.push(`[vh${index}][ah${index}]`);
-            }
-        });
-        graph.push(`${concatLabels.join('')}concat=n=${concatLabels.length}:v=1:a=1[vout][aout]`);
         const filterPath = path.join(temporaryDirectory, 'filter.txt');
         await fs.writeFile(filterPath, graph.join(';\n'), 'utf8');
         args.push('-filter_complex_script', filterPath, '-map', '[vout]', '-map', '[aout]', '-c:v', settings.videoCodec, ...settings.videoArgs, '-pix_fmt', settings.pixelFormat, '-c:a', settings.audioCodec, ...settings.audioArgs);

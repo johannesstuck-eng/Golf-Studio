@@ -44,7 +44,8 @@ import { createTracerFlight, insertTracerIntermediate } from './tracerWorkflow';
 import { lockTracerPointsToWorld, screenToWorld, svgCameraMatrix, worldToScreen } from './cameraLock';
 import { Dashboard } from './AgentDashboard';
 import { firstSequenceForHole, summarizeRoundDesk, type HoleStoryStatus } from './roundDesk';
-import { sequencePlaybackSource } from './roughCut';
+import { sequencePlaybackAudioSource, sequencePlaybackSource } from './roughCut';
+import { compileRenderPlan } from './renderPlan';
 
 const makeId = () => crypto.randomUUID();
 type StudioScreen = 'round' | 'import' | 'review' | 'build' | 'export';
@@ -933,15 +934,16 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
     const mediaElement = () => videoRef.current ?? audioRef.current;
     const pendingOffset = useRef(0);
     const sequenceIds = useMemo(() => roughCutSequenceIds(project, onlyHole), [project, onlyHole]);
+    const previewRenderPlan = useMemo(() => compileRenderPlan(project, sequenceIds), [project, sequenceIds]);
     const items = useMemo(() => sequenceIds.flatMap((sequenceId) => {
         const sequence = project.sequences.find((item) => item.id === sequenceId);
         if (!sequence) return [];
         const block = project.blocks.find((item) => item.id === sequence.targetBlockId);
         if (!block) return [];
         const player = project.settings.players.find((item) => item.id === block.playerId);
-        const playback = sequencePlaybackSource(project, sequence);
+        const playback = sequencePlaybackSource(project, sequence, 0, previewRenderPlan);
         return playback ? [{ sequence, block, player, ...playback }] : [];
-    }), [project, sequenceIds]);
+    }), [project, sequenceIds, previewRenderPlan]);
     const [index, setIndex] = useState(0);
     const [playing, setPlaying] = useState(true);
     const [localFrame, setLocalFrame] = useState(0);
@@ -961,7 +963,10 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
     const [analyzingBall, setAnalyzingBall] = useState(false);
     const [detectionStatus, setDetectionStatus] = useState('');
     const [holeTitleIndex, setHoleTitleIndex] = useState<number>();
-    const current = items[index];
+    const currentItem = items[index];
+    const currentPlayback = currentItem ? sequencePlaybackSource(project, currentItem.sequence, localFrame / currentItem.sequence.sourceFps, previewRenderPlan) : null;
+    const current = currentItem && currentPlayback ? { ...currentItem, ...currentPlayback } : undefined;
+    const currentAudio = currentItem ? sequencePlaybackAudioSource(project, currentItem.sequence, localFrame / currentItem.sequence.sourceFps, previewRenderPlan) : null;
     const previous = items[index - 1];
     const next = items[index + 1];
     const transitionIn = current && previous ? editorialTransition(project, previous.sequence.id, current.sequence.id) : undefined;
@@ -971,7 +976,10 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
     const elapsedBefore = durations.slice(0, index).reduce((sum, duration) => sum + duration, 0);
     const position = Math.min(totalDuration, elapsedBefore + localFrame / (current?.sequence.sourceFps ?? 1));
     const currentTracer = current ? project.shotTracers.find((tracer) => tracer.sequenceId === current.sequence.id) : undefined;
-    const activeTracer = currentTracer?.enabled ? currentTracer : undefined;
+    const activeTracer = currentTracer?.enabled
+        && (!currentTracer.binding?.cutId || currentTracer.binding.cutId === current?.cutId)
+        && (!currentTracer.binding?.mediaId || currentTracer.binding.mediaId === current?.media.id)
+        ? currentTracer : undefined;
     useEffect(() => { setTracerEditing(false); setMarkingBall(false); setManualTracking(false); setTracerWorkflowStep(undefined); setCameraLockStep(undefined); setCameraLockDraft({ referencePoints: [], targetPoints: [] }); setCameraLockBasePoints([]); setLandingMode(false); setLandingOcclusion(false); setTrackingCursor(undefined); setBallCandidates([]); setDetectionStatus(''); }, [current?.sequence.id]);
     useEffect(() => () => { if (transitionTimerRef.current !== undefined) window.clearTimeout(transitionTimerRef.current); }, []);
     useEffect(() => {
@@ -984,7 +992,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         const duration = (current.sequence.outFrame - current.sequence.inFrame) / current.sequence.sourceFps;
         const audioFade = Math.min(duration / 2, EDITORIAL_STYLE.audioFadeFrames / current.sequence.sourceFps);
         const paint = (sourceTime: number) => {
-            const relative = Math.max(0, sourceTime - current.range.inFrame / current.range.sourceFps);
+            const relative = current.momentStartSeconds + Math.max(0, sourceTime - current.range.inFrame / current.range.sourceFps);
             const remaining = Math.max(0, duration - relative);
             const fadeIn = transitionIn?.kind === 'hole-change' ? Math.max(0, 1 - relative / Math.max(.001, transitionIn.dipSeconds)) : 0;
             const fadeOut = transitionOut?.kind === 'hole-change' ? Math.max(0, 1 - remaining / Math.max(.001, transitionOut.dipSeconds)) : 0;
@@ -992,6 +1000,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
             if (holeTitleIndex === undefined) {
                 const gain = Math.min(1, relative / Math.max(.001, audioFade), remaining / Math.max(.001, audioFade));
                 element.volume = Math.max(0, gain);
+                if (audioRef.current) audioRef.current.volume = Math.min(1, Math.max(0, 10 ** ((currentAudio?.gainDb ?? 0) / 20) * gain));
             }
         };
         const requestVideoFrame = videoRef.current?.requestVideoFrameCallback?.bind(videoRef.current);
@@ -1014,17 +1023,31 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         return () => {
             stopped = true;
             element.volume = 1;
+            if (audioRef.current) audioRef.current.volume = Math.min(1, Math.max(0, 10 ** ((currentAudio?.gainDb ?? 0) / 20)));
             if (videoFrameHandle !== undefined) videoRef.current?.cancelVideoFrameCallback?.(videoFrameHandle);
             if (animationHandle !== undefined) cancelAnimationFrame(animationHandle);
         };
-    }, [current?.sequence.id, current?.media.id, transitionIn?.kind, transitionOut?.kind, holeTitleIndex]);
+    }, [current?.sequence.id, current?.cutId, current?.media.id, currentAudio?.audioCutId, transitionIn?.kind, transitionOut?.kind, holeTitleIndex]);
     const startCurrent = () => {
         if (!current) return;
         const element = mediaElement();
         if (!element) return;
-        element.currentTime = current.range.inFrame / current.range.sourceFps + pendingOffset.current;
+        const offsetWithinCut = Math.max(0, pendingOffset.current - current.momentStartSeconds);
+        element.currentTime = current.range.inFrame / current.range.sourceFps + offsetWithinCut;
         pendingOffset.current = 0;
         if (playing) void element.play().catch(() => setPlaying(false));
+    };
+    const syncCurrentAudio = (momentSeconds: number, force = false) => {
+        const audio = audioRef.current;
+        if (!audio || !currentAudio || audio.readyState === 0) return;
+        const target = currentAudio.sourceStartSeconds + Math.max(0, momentSeconds - currentAudio.momentStartSeconds);
+        if (force || Math.abs(audio.currentTime - target) > .15) audio.currentTime = target;
+    };
+    const startCurrentAudio = () => {
+        if (!currentAudio || !audioRef.current) return;
+        audioRef.current.volume = Math.min(1, Math.max(0, 10 ** (currentAudio.gainDb / 20)));
+        syncCurrentAudio(localFrame / (current?.sequence.sourceFps ?? 1), true);
+        if (playing) void audioRef.current.play().catch(() => undefined);
     };
     const goTo = (next: number, offsetSeconds = 0) => {
         const target = Math.min(items.length - 1, Math.max(0, next));
@@ -1038,6 +1061,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
             transitionInProgressRef.current = true;
             setPlaying(false);
             mediaElement()?.pause();
+            audioRef.current?.pause();
             if (editorialFadeRef.current) editorialFadeRef.current.style.opacity = '1';
             setHoleTitleIndex(index + 1);
             transitionTimerRef.current = window.setTimeout(() => {
@@ -1047,13 +1071,23 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
                 goTo(index + 1);
             }, transitionOut.cardSeconds * 1000);
         } else if (index < items.length - 1) goTo(index + 1);
-        else { setPlaying(false); mediaElement()?.pause(); }
+        else { setPlaying(false); mediaElement()?.pause(); audioRef.current?.pause(); }
+    };
+    const advanceCutOrSequence = () => {
+        if (!current) return;
+        const momentDuration = (current.sequence.outFrame - current.sequence.inFrame) / current.sequence.sourceFps;
+        if (current.momentEndSeconds < momentDuration - .000001) {
+            pendingOffset.current = current.momentEndSeconds;
+            setLocalFrame(Math.round(current.momentEndSeconds * current.sequence.sourceFps));
+            return;
+        }
+        advance();
     };
     const togglePlay = () => {
         const element = mediaElement();
         if (!element) return;
-        if (playing) { element.pause(); setPlaying(false); }
-        else { setPlaying(true); void element.play(); }
+        if (playing) { element.pause(); audioRef.current?.pause(); setPlaying(false); }
+        else { setPlaying(true); void element.play(); if (audioRef.current) void audioRef.current.play(); }
     };
     const seekGlobal = (seconds: number) => {
         let remaining = Math.min(totalDuration, Math.max(0, seconds));
@@ -1061,7 +1095,11 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
             if (remaining <= durations[itemIndex] || itemIndex === durations.length - 1) {
                 if (itemIndex === index) {
                     const item = items[itemIndex];
-                    if (item && mediaElement()) mediaElement()!.currentTime = item.range.inFrame / item.range.sourceFps + remaining;
+                    const playback = item ? sequencePlaybackSource(project, item.sequence, remaining, previewRenderPlan) : null;
+                    if (item && playback && mediaElement() && playback.cutId === current?.cutId) {
+                        mediaElement()!.currentTime = playback.range.inFrame / playback.range.sourceFps + remaining - playback.momentStartSeconds;
+                    } else pendingOffset.current = remaining;
+                    syncCurrentAudio(remaining, true);
                     setLocalFrame(Math.round(remaining * (item?.sequence.sourceFps ?? 1)));
                 } else goTo(itemIndex, remaining);
                 return;
@@ -1074,7 +1112,11 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         const duration = current.sequence.outFrame - current.sequence.inFrame;
         const target = Math.min(duration - 1, Math.max(0, Math.round(frame)));
         const element = mediaElement();
-        if (element) element.currentTime = current.range.inFrame / current.range.sourceFps + target / current.sequence.sourceFps;
+        const targetSeconds = target / current.sequence.sourceFps;
+        const playback = sequencePlaybackSource(project, current.sequence, targetSeconds, previewRenderPlan);
+        if (element && playback?.cutId === current.cutId) element.currentTime = playback.range.inFrame / playback.range.sourceFps + targetSeconds - playback.momentStartSeconds;
+        else pendingOffset.current = targetSeconds;
+        syncCurrentAudio(targetSeconds, true);
         setLocalFrame(target);
         setPlaying(false);
         element?.pause();
@@ -1394,16 +1436,18 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
     return <div className="preview-backdrop"><section className="rough-preview">
         <header className="preview-header"><div><div className="eyebrow"><span /> ROHSCHNITT-VORSCHAU</div><h2>{onlyHole ? `Loch ${onlyHole}` : 'Komplette Runde'}</h2></div><div className="preview-now"><span>JETZT</span><b>Loch {current.block.hole} · {current.player?.name} · {current.block.label}</b></div><button className="preview-close" onClick={onClose}><X size={18} /></button></header>
         <div className="preview-body"><div className="preview-player"><div className="preview-stage">
-            {current.media.kind === 'video' ? <video key={`${current.sequence.id}:${current.media.id}`} ref={videoRef} src={fileUrl(current.media.path)} onLoadedMetadata={startCurrent} onTimeUpdate={(event) => {
-                const relativeSeconds = Math.max(0, event.currentTarget.currentTime - current.range.inFrame / current.range.sourceFps);
+            {current.media.kind === 'video' ? <video muted key={`${current.sequence.id}:${current.cutId}`} ref={videoRef} src={fileUrl(current.media.path)} onLoadedMetadata={startCurrent} onTimeUpdate={(event) => {
+                const relativeSeconds = current.momentStartSeconds + Math.max(0, event.currentTarget.currentTime - current.range.inFrame / current.range.sourceFps);
                 const relative = Math.round(relativeSeconds * current.sequence.sourceFps);
                 setLocalFrame(relative);
-                if (event.currentTarget.currentTime >= current.range.outFrame / current.range.sourceFps) advance();
-            }} onEnded={advance} /> : <div className="preview-audio"><FileAudio size={64} /><b>{current.media.name}</b><audio key={current.sequence.id} ref={audioRef} src={fileUrl(current.media.path)} onLoadedMetadata={startCurrent} onTimeUpdate={(event) => {
-                const relativeSeconds = Math.max(0, event.currentTarget.currentTime - current.range.inFrame / current.range.sourceFps);
+                syncCurrentAudio(relativeSeconds);
+                if (event.currentTarget.currentTime >= current.range.outFrame / current.range.sourceFps) advanceCutOrSequence();
+            }} onEnded={advanceCutOrSequence} /> : <div className="preview-audio"><FileAudio size={64} /><b>{current.media.name}</b><audio key={`${current.sequence.id}:${current.cutId}`} ref={audioRef} src={fileUrl(current.media.path)} onLoadedMetadata={startCurrent} onTimeUpdate={(event) => {
+                const relativeSeconds = current.momentStartSeconds + Math.max(0, event.currentTarget.currentTime - current.range.inFrame / current.range.sourceFps);
                 setLocalFrame(Math.round(relativeSeconds * current.sequence.sourceFps));
-                if (event.currentTarget.currentTime >= current.range.outFrame / current.range.sourceFps) advance();
-            }} onEnded={advance} /></div>}
+                if (event.currentTarget.currentTime >= current.range.outFrame / current.range.sourceFps) advanceCutOrSequence();
+            }} onEnded={advanceCutOrSequence} /></div>}
+            {currentAudio && <audio className="canonical-preview-audio" key={`${current.sequence.id}:${currentAudio.audioCutId}`} ref={audioRef} src={fileUrl(currentAudio.media.path)} onLoadedMetadata={startCurrentAudio} />}
             <ShotTracerLayer tracer={activeTracer} frame={localFrame} editing={tracerEditing} marking={markingBall} tracking={Boolean(tracerWorkflowStep || cameraLockStep)} candidates={[]} cameraMarkers={cameraMarkers} videoRef={videoRef} sequence={current.sequence} mediaRange={current.range} onMark={(x, y) => cameraLockStep ? handleCameraLockPoint(x, y) : handleTracerWorkflowPoint(x, y)} onCandidate={() => undefined} onCursor={setTrackingCursor} onPoint={(pointIndex, x, y) => {
                 if (!current || !activeTracer) return;
                 const worldPoint = screenToWorld(activeTracer.cameraLock, localFrame, { x, y });
@@ -1572,6 +1616,10 @@ function ExportScreen({ project }: { project: GolfProject }) {
     }), []);
 
     const startExport = async () => {
+        if (!summary.valid) {
+            setProgress({ phase: 'error', percent: 0, message: summary.diagnostics.find((item) => item.severity === 'error')?.message ?? 'Der Filmstand ist noch nicht exportierbar.' });
+            return;
+        }
         if (!window.golfStudio) {
             setProgress({ phase: 'error', percent: 0, message: 'Export ist nur in der Desktop-App verfügbar.' });
             return;
@@ -1613,10 +1661,11 @@ function ExportScreen({ project }: { project: GolfProject }) {
                         <button className={profile === 'lossless-master' ? 'selected' : ''} disabled={exporting} onClick={() => setProfile('lossless-master')}><span className="profile-check">{profile === 'lossless-master' && <Check size={14} />}</span><div><b>Verlustfreier Master</b><small>Für Archiv und weitere Bearbeitung</small><p>FFV1 speichert jedes gerenderte Pixel verlustfrei. Die Datei wird erheblich größer.</p></div><em>FFV1<br />MKV</em></button>
                     </div>
                 </section>
+                {!summary.valid && <section className="export-progress error"><div><b>Vor dem Export beheben</b><span>{summary.diagnostics.filter((item) => item.severity === 'error').length}</span></div><p>{summary.diagnostics.find((item) => item.severity === 'error')?.message}</p></section>}
                 {progress && <section className={`export-progress ${progress.phase}`}><div><b>{progress.phase === 'complete' ? 'Export fertig' : progress.phase === 'error' ? 'Exportfehler' : progress.phase === 'canceled' ? 'Export abgebrochen' : 'Export läuft'}</b><span>{Math.round(progress.percent)} %</span></div><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><p>{progress.message}</p>{progress.outputPath && <small>{progress.outputPath}</small>}</section>}
             </div>
             <aside className="export-summary-card"><span>DEIN EXPORT</span><h2>{project.settings.course}</h2><div className="export-format-badge"><b>{summary.container}</b><span>{summary.videoCodec}</span></div><dl><div><dt>Auflösung</dt><dd>{summary.width} × {summary.height}</dd></div><div><dt>Bildrate</dt><dd>{summary.fps} fps</dd></div><div><dt>Farbtiefe</dt><dd>{summary.bitDepth} Bit</dd></div><div><dt>Qualität</dt><dd>{summary.qualityLabel}</dd></div></dl>
-                {exporting ? <button className="secondary export-cancel" onClick={cancelExport}><X size={16} /> Export abbrechen</button> : <button className="primary export-start" disabled={!summary.sequenceCount} onClick={startExport}><Download size={17} /> Export starten</button>}
+                {exporting ? <button className="secondary export-cancel" onClick={cancelExport}><X size={16} /> Export abbrechen</button> : <button className="primary export-start" disabled={!summary.sequenceCount || !summary.valid} onClick={startExport}><Download size={17} /> Export starten</button>}
                 {!summary.sequenceCount && <p className="export-empty">Baue zuerst mindestens eine Sequenz in die Runde ein.</p>}
                 <p className="export-note">Overlays und Shot Tracer werden direkt in das Endformat gerendert. Es entsteht keine WebM-Zwischendatei.</p>
             </aside>
