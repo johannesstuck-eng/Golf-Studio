@@ -2,6 +2,11 @@ name: Mac Apple Silicon Preview
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optionaler Tag für eine öffentliche Preview (z. B. v0.1.4-macos-preview.2)"
+        required: false
+        type: string
   push:
     tags:
       - "v*-macos-preview.*"
@@ -16,6 +21,8 @@ jobs:
     steps:
       - name: Projekt laden
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Node.js einrichten
         uses: actions/setup-node@v4
@@ -64,9 +71,10 @@ jobs:
           retention-days: 14
 
       - name: Öffentliche Preview veröffentlichen
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         shell: bash
         run: |
           cat > release-notes.md <<'EOF'
@@ -93,8 +101,8 @@ jobs:
 
           DMG und ZIP enthalten dieselbe App. `SHA256SUMS.txt` ermöglicht die Prüfung der Downloads.
           EOF
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$RELEASE_TAG" \
             release/*.dmg release/*.zip release/SHA256SUMS.txt \
             --prerelease \
-            --title "CUT18 macOS Preview ${GITHUB_REF_NAME#v}" \
+            --title "CUT18 macOS Preview ${RELEASE_TAG#v}" \
             --notes-file release-notes.md
