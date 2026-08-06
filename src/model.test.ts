@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, applyScorecardTee, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
+import { addBlock, applyScorecardTee, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraForMoment, setSequenceCameraFrom, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
 import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
@@ -357,5 +357,25 @@ describe('project model', () => {
         });
         expect(moved.sequences[0].videoCuts).toEqual(approved.sequences[0].videoCuts);
         expect(moved.sequences[0].review).toEqual({ status: 'unreviewed', reviewedFingerprint: null });
+    });
+
+    it('records an A to B to A camera plan without changing master audio', () => {
+        const base = createProject(settings);
+        const sequence = {
+            id: 'moment', sourceType: 'group' as const, sourceId: 'group', inFrame: 0, outFrame: 300, sourceFps: 30,
+            activeMediaId: 'a', multicamAngles: [{ mediaId: 'a', inFrame: 0, outFrame: 300, sourceFps: 30 }, { mediaId: 'b', inFrame: 0, outFrame: 300, sourceFps: 30 }],
+            videoCuts: [{ id: 'initial', mediaId: 'a', startUs: 0, endUs: 10_000_000, origin: 'automatic' as const }],
+            audioPlan: { mediaId: 'a', mode: 'master' as const, offsetUs: 0, gainDb: 0, muted: false }, review: { status: 'approved' as const, reviewedFingerprint: 'old' },
+            targetBlockId: base.blocks[0].id, createdAt: '', updatedAt: '',
+        };
+        const project = { ...base, groups: [{ id: 'group', name: 'Multicam', mediaIds: ['a', 'b'], createdAt: '', syncStatus: 'audio' as const }], sequences: [sequence] };
+        const withB = setSequenceCameraFrom(project, 'moment', 'b', 2_000_000);
+        const final = setSequenceCameraFrom(withB, 'moment', 'a', 8_000_000);
+        expect(final.sequences[0].videoCuts?.map((cut) => [cut.mediaId, cut.startUs, cut.endUs])).toEqual([
+            ['a', 0, 2_000_000], ['b', 2_000_000, 8_000_000], ['a', 8_000_000, 10_000_000],
+        ]);
+        expect(final.sequences[0].audioPlan).toEqual(sequence.audioPlan);
+        expect(final.sequences[0].review).toEqual({ status: 'unreviewed', reviewedFingerprint: null });
+        expect(setSequenceCameraForMoment(final, 'moment', 'b').sequences[0].videoCuts?.map((cut) => cut.mediaId)).toEqual(['b']);
     });
 });

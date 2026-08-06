@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createProject } from './model';
-import { sequencePlaybackAudioSource, sequencePlaybackSource } from './roughCut';
+import { sequencePlaybackAudioSource, sequencePlaybackSource, sequencePreviewSource } from './roughCut';
 import type { GolfProject, MediaItem, ProjectSettings, VirtualSequence } from './types';
 
 const settings: ProjectSettings = { id: 'round', course: 'Test Range', holes: 9, players: [{ id: 'joe', name: 'Joe' }], name: 'Test Range', createdAt: '' };
@@ -19,6 +19,18 @@ describe('rough cut multicam playback', () => {
         expect(playback).toMatchObject({ media: { id: 'camera-b' }, momentStartSeconds: 0 });
         expect(playback!.range.inFrame).toBeCloseTo(6125, 4);
         expect(playback!.range.outFrame).toBeCloseTo(6501, 4);
+    });
+
+    it('previews another synchronized camera without changing the committed cut', () => {
+        const base = createProject(settings);
+        const sequence: VirtualSequence = { id: 'shot', sourceType: 'group', sourceId: 'multicam', inFrame: 0, outFrame: 300, sourceFps: 30, activeMediaId: 'camera-a', multicamAngles: [
+            { mediaId: 'camera-a', inFrame: 0, outFrame: 300, sourceFps: 30 },
+            { mediaId: 'camera-b', inFrame: 30, outFrame: 330, sourceFps: 30 },
+        ], videoCuts: [{ id: 'a', mediaId: 'camera-a', startUs: 0, endUs: 10_000_000, origin: 'manual' }], targetBlockId: base.blocks[0].id, createdAt: '', updatedAt: '' };
+        const project: GolfProject = { ...base, media: [media('camera-a'), media('camera-b')], groups: [{ id: 'multicam', name: 'Multicam', mediaIds: ['camera-a', 'camera-b'], createdAt: '', syncStatus: 'audio' }], sequences: [sequence] };
+
+        expect(sequencePreviewSource(project, sequence, 'camera-b')).toMatchObject({ media: { id: 'camera-b' }, cutId: 'preview-camera-b', momentStartSeconds: 0, momentEndSeconds: 10 });
+        expect(project.sequences[0].videoCuts?.map((cut) => cut.mediaId)).toEqual(['camera-a']);
     });
 
     it('uses the committed camera cut at the requested moment without falling back', () => {
