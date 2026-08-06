@@ -1,6 +1,6 @@
 # Produktstatus
 
-Stand: 5. August 2026
+Stand: 6. August 2026
 
 ## Einordnung
 
@@ -11,6 +11,8 @@ Der vorhandene Code ist deutlich weiter als ein leerer Baseline-Prototyp. Er ent
 - dunkle Electron-/React-Oberfläche für Windows
 - lokaler Video- und Audioimport über Electron-IPC
 - `.golfcut`-Projektmodell mit Schema-Migration
+- kanonisches Moment-, Kamera-, Ton- und Effektmodell als Grundlage für identische Vorschau und Ausgabe
+- deterministischer Renderplan mit strukturierten Warnungen und blockierenden Diagnosen
 - Round Builder mit Zuordnung nach Loch, Spieler und Schlagblock
 - lokale PDF-Scorecard-Erkennung mit Abschlagsauswahl und kontrollierter Übernahme von Par, Länge und Vorgabe
 - automatische Spielerreihenfolge und strukturierter Rohschnitt

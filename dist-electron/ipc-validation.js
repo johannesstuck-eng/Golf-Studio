@@ -17,6 +17,7 @@ const limits = {
     groups: 250,
     players: 16,
     sequenceIds: 1000,
+    cuts: 2000,
     text: 500,
 };
 
@@ -191,6 +192,7 @@ export function validateProject(projectValue) {
     if (blockIds.size !== blocks.length) fail('project.blocks', 'Doppelte Block-IDs sind nicht erlaubt.');
 
     const sequences = array(project.sequences, 'project.sequences', limits.sequences);
+    const sequenceCutIds = new Map();
     const sequenceIds = new Set(sequences.map((value, index) => {
         const sequence = record(value, `project.sequences[${index}]`);
         const id = string(sequence.id, `project.sequences[${index}].id`, 128);
@@ -226,6 +228,45 @@ export function validateProject(projectValue) {
             }
         }
         if (!blockIds.has(sequence.targetBlockId)) fail(`project.sequences[${index}].targetBlockId`, 'Unbekannte Block-ID.');
+        if (sequence.videoCuts !== undefined) {
+            const cuts = array(sequence.videoCuts, `project.sequences[${index}].videoCuts`, limits.cuts);
+            const cutIds = new Set();
+            const allowedMediaIds = sequence.sourceType === 'group'
+                ? (groupMediaIds.get(sequence.sourceId) ?? new Set())
+                : new Set([sequence.sourceId]);
+            cuts.forEach((value, cutIndex) => {
+                const cut = record(value, `project.sequences[${index}].videoCuts[${cutIndex}]`);
+                const cutId = string(cut.id, `project.sequences[${index}].videoCuts[${cutIndex}].id`, 128);
+                if (cutIds.has(cutId)) fail(`project.sequences[${index}].videoCuts`, 'Doppelte Schnitt-IDs sind nicht erlaubt.');
+                cutIds.add(cutId);
+                if (cut.mediaId !== null) {
+                    const mediaId = string(cut.mediaId, `project.sequences[${index}].videoCuts[${cutIndex}].mediaId`, 128);
+                    if (!allowedMediaIds.has(mediaId)) fail(`project.sequences[${index}].videoCuts[${cutIndex}].mediaId`, 'Kamera gehÃ¶rt nicht zur Sequenzquelle.');
+                }
+                finite(cut.startUs, `project.sequences[${index}].videoCuts[${cutIndex}].startUs`, 0, 6 * 60 * 60 * 1_000_000, true);
+                finite(cut.endUs, `project.sequences[${index}].videoCuts[${cutIndex}].endUs`, 1, 6 * 60 * 60 * 1_000_000, true);
+                if (cut.endUs <= cut.startUs) fail(`project.sequences[${index}].videoCuts[${cutIndex}]`, 'endUs muss hinter startUs liegen.');
+                enumeration(cut.origin, `project.sequences[${index}].videoCuts[${cutIndex}].origin`, new Set(['automatic', 'manual', 'mixed', 'migrated']));
+                if (cut.locked !== undefined) boolean(cut.locked, `project.sequences[${index}].videoCuts[${cutIndex}].locked`);
+            });
+            sequenceCutIds.set(id, cutIds);
+        }
+        if (sequence.audioPlan !== undefined) {
+            const audio = record(sequence.audioPlan, `project.sequences[${index}].audioPlan`);
+            enumeration(audio.mode, `project.sequences[${index}].audioPlan.mode`, new Set(['master', 'follow-camera', 'muted']));
+            if (audio.mediaId !== null) {
+                const audioMediaId = string(audio.mediaId, `project.sequences[${index}].audioPlan.mediaId`, 128);
+                if (!mediaIds.has(audioMediaId)) fail(`project.sequences[${index}].audioPlan.mediaId`, 'Unbekannte Tonquelle.');
+            }
+            finite(audio.offsetUs, `project.sequences[${index}].audioPlan.offsetUs`, -6 * 60 * 60 * 1_000_000, 6 * 60 * 60 * 1_000_000, true);
+            finite(audio.gainDb, `project.sequences[${index}].audioPlan.gainDb`, -96, 24);
+            boolean(audio.muted, `project.sequences[${index}].audioPlan.muted`);
+        }
+        if (sequence.review !== undefined) {
+            const review = record(sequence.review, `project.sequences[${index}].review`);
+            enumeration(review.status, `project.sequences[${index}].review.status`, new Set(['unreviewed', 'needs-review', 'approved']));
+            if (review.reviewedFingerprint !== null) string(review.reviewedFingerprint, `project.sequences[${index}].review.reviewedFingerprint`, 256);
+        }
         return id;
     }));
     if (sequenceIds.size !== sequences.length) fail('project.sequences', 'Doppelte Sequenz-IDs sind nicht erlaubt.');
@@ -258,6 +299,18 @@ export function validateProject(projectValue) {
         nullableFinite(tracer.disappearFrame, `project.shotTracers[${index}].disappearFrame`, 0, 1_000_000_000, true);
         nullableFinite(tracer.occlusionStartFrame, `project.shotTracers[${index}].occlusionStartFrame`, 0, 1_000_000_000, true);
         nullableFinite(tracer.occlusionEndFrame, `project.shotTracers[${index}].occlusionEndFrame`, 0, 1_000_000_000, true);
+        if (tracer.binding !== undefined) {
+            const binding = record(tracer.binding, `project.shotTracers[${index}].binding`);
+            if (binding.cutId !== undefined) {
+                const cutId = string(binding.cutId, `project.shotTracers[${index}].binding.cutId`, 128);
+                const cutIds = sequenceCutIds.get(tracer.sequenceId);
+                if (cutIds && !cutIds.has(cutId)) fail(`project.shotTracers[${index}].binding.cutId`, 'Unbekannter Kameraschnitt.');
+            }
+            if (binding.mediaId !== undefined) {
+                const mediaId = string(binding.mediaId, `project.shotTracers[${index}].binding.mediaId`, 128);
+                if (!mediaIds.has(mediaId)) fail(`project.shotTracers[${index}].binding.mediaId`, 'Unbekannte Tracer-Kamera.');
+            }
+        }
         array(tracer.points, `project.shotTracers[${index}].points`, limits.tracerPoints).forEach((point, pointIndex) => validatePoint(point, `project.shotTracers[${index}].points[${pointIndex}]`));
         if (tracer.cameraLock !== null && tracer.cameraLock !== undefined) {
             const lock = record(tracer.cameraLock, `project.shotTracers[${index}].cameraLock`);

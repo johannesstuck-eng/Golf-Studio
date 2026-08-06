@@ -61,6 +61,34 @@ describe('IPC validation', () => {
         assert.throws(() => validateExportRequest({ project, sequenceIds: ['sequence-1'], profile: 'source-matched' }), /Multicam-Gruppe/);
     });
 
+    it('accepts structurally valid camera, audio and review plans', () => {
+        const project = projectFixture();
+        project.schemaVersion = 9;
+        project.sequences[0].videoCuts = [{ id: 'cut-1', mediaId: 'media-1', startUs: 0, endUs: 10_000_000, origin: 'manual' }];
+        project.sequences[0].audioPlan = { mediaId: 'media-1', mode: 'master', offsetUs: 0, gainDb: 0, muted: false };
+        project.sequences[0].review = { status: 'unreviewed', reviewedFingerprint: null };
+        project.shotTracers = [{
+            sequenceId: 'sequence-1', enabled: true, color: '#adff2f', thickness: 4, glow: 20, smoothing: 0.5, tailLength: 0.5,
+            impactFrame: 10, endFrame: 20, disappearFrame: 30, occlusionStartFrame: null, occlusionEndFrame: null, points: [],
+            binding: { cutId: 'cut-1', mediaId: 'media-1' }, cameraLock: null,
+        }];
+        assert.doesNotThrow(() => validateExportRequest({ project, sequenceIds: ['sequence-1'], profile: 'source-matched' }));
+    });
+
+    it('rejects malformed camera plans and dangling tracer bindings', () => {
+        const project = projectFixture();
+        project.schemaVersion = 9;
+        project.sequences[0].videoCuts = [{ id: 'cut-1', mediaId: 'media-1', startUs: 0, endUs: 10_000_000, origin: 'manual' }];
+        project.shotTracers = [{
+            sequenceId: 'sequence-1', enabled: true, color: '#adff2f', thickness: 4, glow: 20, smoothing: 0.5, tailLength: 0.5,
+            impactFrame: 10, endFrame: 20, disappearFrame: 30, occlusionStartFrame: null, occlusionEndFrame: null, points: [],
+            binding: { cutId: 'missing-cut', mediaId: 'media-1' }, cameraLock: null,
+        }];
+        assert.throws(() => validateExportRequest({ project, sequenceIds: ['sequence-1'], profile: 'source-matched' }), /Kameraschnitt/);
+        project.sequences[0].videoCuts[0].origin = 'guessed';
+        assert.throws(() => validateExportRequest({ project, sequenceIds: ['sequence-1'], profile: 'source-matched' }), /Nicht unterst/);
+    });
+
     it('accepts only bounded local media for audio synchronization', () => {
         const request = { groupId: 'group-1', media: [
             { id: 'a', path: fixturePath, recordedAt: '2026-08-05T10:00:00.000Z', durationSeconds: 10, hasAudio: true },

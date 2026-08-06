@@ -190,9 +190,48 @@ export interface VirtualSequence {
     sourceFps: number;
     activeMediaId?: string;
     multicamAngles?: MulticamAngle[];
+    /**
+     * Final picture decisions for this moment. Times are integer microseconds,
+     * relative to the start of the sequence. Cuts must be ordered, contiguous,
+     * non-overlapping and cover the complete sequence duration.
+     */
+    videoCuts?: VideoCut[];
+    /** Audio is deliberately independent from picture cuts. */
+    audioPlan?: AudioPlan;
+    review?: SequenceReview;
     targetBlockId: string;
     createdAt: string;
     updatedAt: string;
+}
+
+export interface VideoCut {
+    id: string;
+    /** Null is an unresolved source and must block final rendering. */
+    mediaId: string | null;
+    /** Inclusive start, relative to the sequence start. */
+    startUs: number;
+    /** Exclusive end, relative to the sequence start. */
+    endUs: number;
+    origin: VideoCutOrigin;
+    locked?: boolean;
+}
+
+export type VideoCutOrigin = 'automatic' | 'manual' | 'mixed' | 'migrated';
+
+export interface AudioPlan {
+    /** A fixed source for continuous audio; null is valid only in muted mode. */
+    mediaId: string | null;
+    mode: 'master' | 'follow-camera' | 'muted';
+    /** Fine adjustment relative to the synchronized sequence timeline. */
+    offsetUs: number;
+    gainDb: number;
+    muted: boolean;
+}
+
+export interface SequenceReview {
+    status: 'unreviewed' | 'needs-review' | 'approved';
+    /** Fingerprint of the render-relevant state that was approved. */
+    reviewedFingerprint: string | null;
 }
 
 export interface MulticamAngle {
@@ -237,6 +276,8 @@ export interface ShotTracerCameraLock {
 export interface ShotTracerEffect {
     id: string;
     sequenceId: string;
+    /** The exact picture decision and camera for which the tracer is calibrated. */
+    binding?: ShotTracerBinding;
     enabled: boolean;
     impactFrame: number | null;
     endFrame: number | null;
@@ -250,6 +291,11 @@ export interface ShotTracerEffect {
     occlusionStartFrame: number | null;
     occlusionEndFrame: number | null;
     cameraLock: ShotTracerCameraLock | null;
+}
+
+export interface ShotTracerBinding {
+    cutId?: string;
+    mediaId?: string;
 }
 
 export interface PlayerOrder {

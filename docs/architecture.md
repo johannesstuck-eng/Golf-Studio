@@ -1,5 +1,7 @@
 # Architektur
 
+Die verbindliche Produkt- und Schnittlogik ist in [editing-workflow.md](editing-workflow.md) beschrieben. Seit Schema 9 wird der filmische Zustand als Golf-Momente mit Camera Cuts, unabhängigem Audio-Plan und winkelgebundenen Effekten modelliert. Ein rendererunabhängiger Compiler unter `shared/render-plan.mjs` bildet daraus den kanonischen Renderplan und strukturierte Diagnosen; Vorschau, Exportzusammenfassung und FFmpeg-Export werden schrittweise auf genau diesen Vertrag umgestellt.
+
 ## Entscheidung
 
 CUT18 bleibt für die nächste Produktphase bei **Electron + React + TypeScript**. Diese Entscheidung nutzt die vorhandene App, minimiert einen riskanten Rewrite und bietet einen gut automatisierbaren Entwicklungs- und Testpfad. Sie wird nach dem Windows-MVP anhand gemessener Startzeit, Speicherbedarf, Paketgröße und Video-Performance überprüft.
