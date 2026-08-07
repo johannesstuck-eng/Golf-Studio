@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, addCountedStroke, applyScorecardTee, automaticPlayerOrder, clearHoleBlockOrderOverride, clearPlayerOrderOverride, createMulticamGroup, createProject, deleteBlock, duplicateBlock, effectiveHoleBlockOrder, effectivePlayerOrder, hasHoleBlockOrderOverride, hasPlayerOrderOverride, moveBlock, moveBlockInHoleOrder, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerHoleStrokeCount, playerScoreToPar, proposeShotTracer, removeMulticamGroup, roughCutSequenceIds, sequenceDurationUs, setMediaAssignedHole, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateProjectSettings, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
+import { addBlock, addBlockAtOrder, addCountedStroke, applyScorecardTee, automaticPlayerOrder, clearHoleBlockOrderOverride, clearPlayerOrderOverride, createMulticamGroup, createProject, deleteBlock, duplicateBlock, effectiveHoleBlockOrder, effectivePlayerOrder, hasHoleBlockOrderOverride, hasPlayerOrderOverride, moveBlock, moveBlockInHoleOrder, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerHoleStrokeCount, playerScoreToPar, proposeShotTracer, removeMulticamGroup, roughCutSequenceIds, sequenceDurationUs, setMediaAssignedHole, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateProjectSettings, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
 import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
@@ -62,6 +62,15 @@ describe('project model', () => {
         const moved = moveBlock(duplicated, newBlock.id, -1);
         expect(moved.blocks.find((block) => block.id === newBlock.id)!.order).toBeLessThan(newBlock.order);
         expect(deleteBlock(moved, newBlock.id).blocks.some((block) => block.id === newBlock.id)).toBe(false);
+    });
+
+    it('inserts an additional shot into a chosen playbook round', () => {
+        const project = createProject(settings);
+        const inserted = addBlockAtOrder(project, 1, 'joe', 'approach', 2);
+        const lane = inserted.blocks.filter((block) => block.hole === 1 && block.playerId === 'joe').sort((left, right) => left.order - right.order);
+        expect(lane.map((block) => block.type)).toEqual(['tee-shot', 'approach', 'approach', 'greenside', 'putt']);
+        expect(lane.map((block) => block.order)).toEqual([0, 1, 2, 3, 4]);
+        expect(lane.map((block) => block.details.shotNumber)).toEqual([1, 2, 3, 4, 5]);
     });
 
     it('keeps sequence order inside a block', () => {

@@ -1,6 +1,6 @@
 {
   "name": "cut18-local",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "private": true,
   "description": "CUT18 – das lokale Schnitt-Playbook für vollständige Golfvideos",
   "main": "dist-electron/main.js",
