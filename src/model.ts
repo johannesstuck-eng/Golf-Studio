@@ -7,6 +7,7 @@ import {
     type HoleData,
     type MediaItem,
     type MulticamAngle,
+    type MulticamGroup,
     type MulticamSuggestion,
     type OverlayPosition,
     type OverlayType,
@@ -23,6 +24,7 @@ import { compileRenderPlan } from './renderPlan';
 
 const CORE_BLOCKS: BlockType[] = ['tee-shot', 'approach', 'greenside', 'putt'];
 const SHOT_BLOCKS = new Set<BlockType>(['tee-shot', 'approach', 'greenside', 'bunker', 'putt', 'extra-shot', 'penalty']);
+export const MAX_MULTICAM_SOURCES = 12;
 
 const id = () => crypto.randomUUID();
 const MICROSECONDS_PER_SECOND = 1_000_000;
@@ -359,6 +361,33 @@ export function setMediaAssignedHole(project: GolfProject, mediaId: string, hole
         media: project.media.map((media) => media.id === mediaId ? { ...media, assignedHole } : media),
         modifiedAt: new Date().toISOString(),
     };
+}
+
+export function createMulticamGroup(project: GolfProject, mediaIds: string[], name?: string): GolfProject {
+    const uniqueIds = [...new Set(mediaIds)];
+    const media = uniqueIds.map((mediaId) => project.media.find((item) => item.id === mediaId));
+    if (uniqueIds.length < 2) throw new Error('Wähle mindestens zwei Clips für eine Multicam-Gruppe.');
+    if (uniqueIds.length > MAX_MULTICAM_SOURCES) throw new Error(`Eine Multicam-Gruppe darf höchstens ${MAX_MULTICAM_SOURCES} Clips enthalten.`);
+    if (media.some((item) => !item || item.kind !== 'video')) throw new Error('Multicam-Gruppen können nur aus vorhandenen Videoclips erstellt werden.');
+    if (project.groups.some((group) => group.mediaIds.length === uniqueIds.length && group.mediaIds.every((mediaId) => uniqueIds.includes(mediaId)))) {
+        throw new Error('Diese Clips sind bereits als Multicam-Gruppe angelegt.');
+    }
+    const group: MulticamGroup = {
+        id: id(),
+        name: name?.trim() || `Multicam ${project.groups.length + 1}`,
+        mediaIds: uniqueIds,
+        createdAt: new Date().toISOString(),
+        syncStatus: 'timestamp-only',
+    };
+    return { ...project, groups: [...project.groups, group], modifiedAt: new Date().toISOString() };
+}
+
+export function removeMulticamGroup(project: GolfProject, groupId: string): GolfProject {
+    if (!project.groups.some((group) => group.id === groupId)) return project;
+    if (project.sequences.some((sequence) => sequence.sourceType === 'group' && sequence.sourceId === groupId)) {
+        throw new Error('Diese Multicam-Gruppe wird bereits in Sequenzen verwendet und kann nicht entfernt werden.');
+    }
+    return { ...project, groups: project.groups.filter((group) => group.id !== groupId), modifiedAt: new Date().toISOString() };
 }
 
 export function updateProjectSettings(
@@ -1107,6 +1136,7 @@ export function suggestMulticam(media: MediaItem[]): MulticamSuggestion[] {
         cluster ? cluster.push(item) : clusters.push([item]);
     }
     return clusters
+        .filter((cluster) => cluster.length <= MAX_MULTICAM_SOURCES)
         .filter((cluster) => cluster.some((item, itemIndex) => cluster.slice(itemIndex + 1).some((other) => representsDistinctCameraStreams(item, other))))
         .map((cluster, index) => {
             const starts = cluster.map(start);
