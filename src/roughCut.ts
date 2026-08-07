@@ -27,6 +27,14 @@ export function shouldAdvanceVideoCut(mediaTime: number, outFrame: number, sourc
     return mediaTime >= lastFrameStart - .0005;
 }
 
+export function nextPlayableMomentSeconds(renderPlan: RenderPlan, sequenceId: string, afterSeconds: number): number | null {
+    const afterUs = Math.max(0, Math.round(afterSeconds * 1_000_000));
+    const segment = renderPlan.videoSegments
+        .filter((item) => item.sequenceId === sequenceId && item.startUs >= afterUs)
+        .sort((left, right) => left.startUs - right.startUs)[0];
+    return segment ? segment.startUs / 1_000_000 : null;
+}
+
 export function sequencePlaybackSource(project: GolfProject, sequence: VirtualSequence, momentSeconds = 0, renderPlan?: RenderPlan): SequencePlaybackSource | null {
     const plan = renderPlan ?? compileRenderPlan(project, [sequence.id]);
     const momentUs = Math.max(0, Math.round(momentSeconds * 1_000_000));

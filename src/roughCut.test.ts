@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createProject } from './model';
-import { sequencePlaybackAudioSource, sequencePlaybackSource, sequencePreviewSource, shouldAdvanceVideoCut } from './roughCut';
+import { nextPlayableMomentSeconds, sequencePlaybackAudioSource, sequencePlaybackSource, sequencePreviewSource, shouldAdvanceVideoCut } from './roughCut';
+import { compileRenderPlan } from './renderPlan';
 import type { GolfProject, MediaItem, ProjectSettings, VirtualSequence } from './types';
 
 const settings: ProjectSettings = { id: 'round', course: 'Test Range', holes: 9, players: [{ id: 'joe', name: 'Joe' }], name: 'Test Range', createdAt: '' };
@@ -58,5 +59,19 @@ describe('rough cut multicam playback', () => {
         expect(sequencePlaybackSource(project, sequence, 9)?.media.id).toBe('camera-a');
         const unresolved = { ...sequence, videoCuts: [{ ...sequence.videoCuts![0], mediaId: null, endUs: 10_000_000 }] };
         expect(sequencePlaybackSource({ ...project, sequences: [unresolved] }, unresolved, 1)).toBeNull();
+    });
+
+    it('finds the next playable cut after a missing camera range', () => {
+        const base = createProject(settings);
+        const sequence: VirtualSequence = { id: 'shot', sourceType: 'group', sourceId: 'multicam', inFrame: 0, outFrame: 300, sourceFps: 30, activeMediaId: 'camera-a', multicamAngles: [
+            { mediaId: 'camera-a', inFrame: 0, outFrame: 300, sourceFps: 30 },
+        ], videoCuts: [
+            { id: 'missing', mediaId: 'camera-missing', startUs: 0, endUs: 2_000_000, origin: 'manual' },
+            { id: 'available', mediaId: 'camera-a', startUs: 2_000_000, endUs: 10_000_000, origin: 'manual' },
+        ], targetBlockId: base.blocks[0].id, createdAt: '', updatedAt: '' };
+        const project: GolfProject = { ...base, media: [media('camera-a')], groups: [{ id: 'multicam', name: 'Multicam', mediaIds: ['camera-a'], createdAt: '', syncStatus: 'manual' }], sequences: [sequence] };
+        const plan = compileRenderPlan(project, ['shot']);
+        expect(nextPlayableMomentSeconds(plan, 'shot', 0)).toBe(2);
+        expect(nextPlayableMomentSeconds(plan, 'shot', 9)).toBeNull();
     });
 });
