@@ -32,6 +32,15 @@ describe('IPC validation', () => {
         if (process.platform === 'win32') assert.throws(() => validateProbePaths(['\\\\server\\share\\video.mp4']), /lokaler Dateipfad/);
     });
 
+    it('accepts large round imports up to the project media limit', () => {
+        const root = process.platform === 'win32' ? 'C:\\video' : '/video';
+        const separator = process.platform === 'win32' ? '\\' : '/';
+        const paths = Array.from({ length: 238 }, (_, index) => `${root}${separator}round-${index}.mp4`);
+        assert.equal(validateProbePaths(paths).length, 238);
+        const tooMany = Array.from({ length: 1001 }, (_, index) => `${root}${separator}overflow-${index}.mp4`);
+        assert.throws(() => validateProbePaths(tooMany), /Höchstens 1000 Einträge/);
+    });
+
     it('rejects malformed numeric data before it can reach FFmpeg', () => {
         const project = projectFixture();
         project.sequences[0].sourceFps = Number.NaN;
