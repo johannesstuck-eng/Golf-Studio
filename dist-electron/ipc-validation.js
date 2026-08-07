@@ -356,7 +356,7 @@ export function validateExportRequest(requestValue) {
 }
 
 export function validateProbePaths(pathsValue) {
-    return uniqueStrings(pathsValue, 'paths', 100).map((filePath, index) => validateLocalMediaPath(filePath, `paths[${index}]`));
+    return uniqueStrings(pathsValue, 'paths', limits.media).map((filePath, index) => validateLocalMediaPath(filePath, `paths[${index}]`));
 }
 
 export async function assertMediaFilesAreReadable(project, stat = async (filePath) => (await import('node:fs/promises')).stat(filePath)) {

@@ -116,7 +116,11 @@ async function probeMedia(filePath, ffprobe) {
 async function probePaths(paths) {
     const unique = validateProbePaths(paths);
     const ffprobe = await mediaEngine.require('ffprobe');
-    const results = await Promise.allSettled(unique.map((filePath) => probeMedia(filePath, ffprobe)));
+    const results = [];
+    const concurrency = 8;
+    for (let index = 0; index < unique.length; index += concurrency) {
+        results.push(...await Promise.allSettled(unique.slice(index, index + concurrency).map((filePath) => probeMedia(filePath, ffprobe))));
+    }
     return results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
 }
 
