@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, addCountedStroke, applyScorecardTee, automaticPlayerOrder, clearHoleBlockOrderOverride, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectiveHoleBlockOrder, effectivePlayerOrder, hasHoleBlockOrderOverride, hasPlayerOrderOverride, moveBlock, moveBlockInHoleOrder, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerHoleStrokeCount, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMediaAssignedHole, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
+import { addBlock, addCountedStroke, applyScorecardTee, automaticPlayerOrder, clearHoleBlockOrderOverride, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectiveHoleBlockOrder, effectivePlayerOrder, hasHoleBlockOrderOverride, hasPlayerOrderOverride, moveBlock, moveBlockInHoleOrder, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerHoleStrokeCount, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMediaAssignedHole, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateProjectSettings, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
 import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
@@ -460,5 +460,28 @@ describe('project model', () => {
         const moved = setSequenceCameraCutBoundary({ ...base, sequences: [sequence] }, 'moment', 'a-cut', 'b-cut', 10_000_000);
         expect(moved.sequences[0].videoCuts?.[0].endUs).toBe(9_966_667);
         expect(moved.sequences[0].videoCuts?.[1].startUs).toBe(9_966_667);
+    });
+
+    it('changes an 18-hole project to 9 holes without deleting later-hole work', () => {
+        const eighteen = createProject({ ...settings, holes: 18 });
+        const blockOnTwelve = eighteen.blocks.find((block) => block.hole === 12)!;
+        const project = {
+            ...eighteen,
+            sequences: [{ id: 'hole-12', sourceType: 'media' as const, sourceId: 'clip', inFrame: 0, outFrame: 30, sourceFps: 30, targetBlockId: blockOnTwelve.id, createdAt: '', updatedAt: '' }],
+        };
+        const updated = updateProjectSettings(project, { ...project.settings, course: 'Kurzplatz', holes: 9 });
+        expect(updated.settings).toMatchObject({ course: 'Kurzplatz', holes: 9, name: 'Kurzplatz · 9 Loch' });
+        expect(updated.blocks.some((block) => block.id === blockOnTwelve.id)).toBe(true);
+        expect(updated.sequences[0].targetBlockId).toBe(blockOnTwelve.id);
+        expect(updated.courseData.holes).toHaveLength(18);
+        expect(normalizeProject(updated).courseData.holes).toHaveLength(18);
+    });
+
+    it('adds the missing round structure when a project expands to 18 holes', () => {
+        const nine = createProject(settings);
+        const updated = updateProjectSettings(nine, { ...nine.settings, holes: 18 });
+        expect(updated.settings.holes).toBe(18);
+        expect(updated.courseData.holes).toHaveLength(18);
+        expect(updated.blocks.some((block) => block.hole === 18)).toBe(true);
     });
 });
