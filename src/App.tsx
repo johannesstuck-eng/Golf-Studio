@@ -8,7 +8,7 @@ import {
 import {
     addBlock, applyScorecardTee, blockLabel, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
     effectivePlayerOrder, hasPlayerOrderOverride, markSequenceReviewed, moveBlock, movePlayerInOrder, moveSequence,
-    multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceCameraForMoment, setSequenceCameraFrom,
+    multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom,
     suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore,
     updateSequenceOverlay, updateShotTracer, upsertSequence,
 } from './model';
@@ -44,7 +44,7 @@ import { createTracerFlight, insertTracerIntermediate } from './tracerWorkflow';
 import { lockTracerPointsToWorld, screenToWorld, svgCameraMatrix, worldToScreen } from './cameraLock';
 import { Dashboard } from './AgentDashboard';
 import { firstSequenceForHole, sequenceProductionStatus, summarizeRoundDesk, type ProductionStatus } from './roundDesk';
-import { sequencePlaybackAudioSource, sequencePlaybackSource, sequencePreviewSource } from './roughCut';
+import { sequencePlaybackAudioSource, sequencePlaybackSource, sequencePreviewSource, shouldAdvanceVideoCut } from './roughCut';
 import { compileRenderPlan } from './renderPlan';
 
 const makeId = () => crypto.randomUUID();
@@ -735,7 +735,7 @@ function ShotTracerLayer({ tracer, frame, editing, marking, tracking, candidates
         return { x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)), y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)) };
     };
     return <svg className={`shot-tracer-layer ${editing ? 'editing' : ''} ${marking ? 'marking' : ''}`} viewBox="0 0 1000 1000" preserveAspectRatio="none" data-active={tracer.enabled} onPointerDown={(event) => {
-        if (!marking || event.target !== event.currentTarget) return;
+        if (!marking) return;
         const point = coordinates(event); onMark(point.x, point.y);
     }} onPointerMove={(event) => {
         onCursor(coordinates(event));
@@ -925,12 +925,46 @@ function ShotTracerControls({ project, sequence, tracer, frame, editing, workflo
     </div>;
 }
 
+function CameraPlanTimeline({ project, sequence, activeCutId, setProject, onSeek }: {
+    project: GolfProject;
+    sequence: VirtualSequence;
+    activeCutId: string;
+    setProject: (project: GolfProject) => void;
+    onSeek: (frame: number) => void;
+}) {
+    const [dragging, setDragging] = useState<{ leftCutId: string; rightCutId: string }>();
+    const cuts = [...(sequence.videoCuts ?? [])].sort((left, right) => left.startUs - right.startUs);
+    const durationUs = Math.max(1, Math.round((sequence.outFrame - sequence.inFrame) / sequence.sourceFps * 1_000_000));
+    if (cuts.length === 0) return null;
+    const moveBoundary = (event: React.PointerEvent<HTMLDivElement>) => {
+        if (!dragging) return;
+        const rect = event.currentTarget.getBoundingClientRect();
+        const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(1, rect.width)));
+        setProject(setSequenceCameraCutBoundary(project, sequence.id, dragging.leftCutId, dragging.rightCutId, ratio * durationUs));
+    };
+    return <section className={`camera-plan-timeline ${dragging ? 'dragging' : ''}`}>
+        <header><span><Film size={13} /> FINALER FILM</span><small>{cuts.length > 1 ? 'Schnittkante ziehen, um den Kamerawechsel anzupassen' : 'Weitere Kamera ab Abspielposition übernehmen, um einen Schnitt anzulegen'}</small></header>
+        <div className="camera-plan-track" onPointerMove={moveBoundary} onPointerUp={() => setDragging(undefined)} onPointerCancel={() => setDragging(undefined)}>
+            {cuts.map((cut, cutIndex) => {
+                const media = project.media.find((item) => item.id === cut.mediaId);
+                return <button className={`camera-plan-segment ${cut.id === activeCutId ? 'active' : ''} ${cutIndex === cuts.length - 1 ? 'last' : ''}`} key={cut.id} style={{ width: `${Math.max(.5, (cut.endUs - cut.startUs) / durationUs * 100)}%` }} title={`${media?.name ?? 'Kamera offen'} · ${((cut.endUs - cut.startUs) / 1_000_000).toFixed(2)} s`} onClick={() => { if (!dragging) onSeek(Math.round(cut.startUs / 1_000_000 * sequence.sourceFps)); }}><b>{media?.device || `Cam ${cutIndex + 1}`}</b><small>{((cut.endUs - cut.startUs) / 1_000_000).toFixed(1)} s</small></button>;
+            })}
+            {cuts.slice(0, -1).map((cut, cutIndex) => cut.locked || cuts[cutIndex + 1].locked ? null : <button className="camera-plan-handle" key={`${cut.id}-boundary`} style={{ left: `${cut.endUs / durationUs * 100}%` }} aria-label={`Schnittkante ${cutIndex + 1} verschieben`} title="Ziehen, um den Umschnitt zu verschieben" onPointerDown={(event) => {
+                event.preventDefault(); event.stopPropagation();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                setDragging({ leftCutId: cut.id, rightCutId: cuts[cutIndex + 1].id });
+            }}><span /></button>)}
+        </div>
+    </section>;
+}
+
 function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { project: GolfProject; setProject: (project: GolfProject) => void; onlyHole?: number; onClose: () => void; onEdit: (sequenceId: string) => void }) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const audioRef = useRef<HTMLAudioElement>(null);
     const editorialFadeRef = useRef<HTMLDivElement>(null);
     const transitionTimerRef = useRef<number | undefined>(undefined);
     const transitionInProgressRef = useRef(false);
+    const cutAdvanceGuardRef = useRef(false);
     const mediaElement = () => videoRef.current ?? audioRef.current;
     const pendingOffset = useRef(0);
     const sequenceIds = useMemo(() => roughCutSequenceIds(project, onlyHole), [project, onlyHole]);
@@ -1081,7 +1115,8 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         else { setPlaying(false); mediaElement()?.pause(); audioRef.current?.pause(); }
     };
     const advanceCutOrSequence = () => {
-        if (!current) return;
+        if (!current || cutAdvanceGuardRef.current) return;
+        cutAdvanceGuardRef.current = true;
         const momentDuration = (current.sequence.outFrame - current.sequence.inFrame) / current.sequence.sourceFps;
         if (current.momentEndSeconds < momentDuration - .000001) {
             pendingOffset.current = current.momentEndSeconds;
@@ -1090,6 +1125,29 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         }
         advance();
     };
+    useEffect(() => {
+        cutAdvanceGuardRef.current = false;
+        const video = videoRef.current;
+        if (!video || !current || current.media.kind !== 'video' || !playing) return;
+        let stopped = false;
+        let handle: number | undefined;
+        const requestVideoFrame = video.requestVideoFrameCallback?.bind(video);
+        if (!requestVideoFrame) return;
+        const tick = (_now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => {
+            if (stopped) return;
+            if (shouldAdvanceVideoCut(metadata.mediaTime, current.range.outFrame, current.range.sourceFps)) {
+                video.pause();
+                advanceCutOrSequence();
+                return;
+            }
+            handle = requestVideoFrame(tick);
+        };
+        handle = requestVideoFrame(tick);
+        return () => {
+            stopped = true;
+            if (handle !== undefined) video.cancelVideoFrameCallback?.(handle);
+        };
+    }, [current?.sequence.id, current?.cutId, current?.media.id, current?.range.outFrame, current?.range.sourceFps, playing]);
     const togglePlay = () => {
         const element = mediaElement();
         if (!element) return;
@@ -1263,7 +1321,14 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
     };
     const confirmImpactFrame = () => {
         if (!current || !currentTracer) return;
-        setProject(updateShotTracer(project, current.sequence.id, { impactFrame: localFrame, endFrame: localFrame + 1, disappearFrame: localFrame + 1, points: [] }));
+        setProject(updateShotTracer(project, current.sequence.id, {
+            enabled: true,
+            binding: { mediaId: current.media.id, cutId: current.cutId.startsWith('preview-') ? undefined : current.cutId },
+            impactFrame: localFrame,
+            endFrame: localFrame + 1,
+            disappearFrame: localFrame + 1,
+            points: [],
+        }));
         setTracerWorkflowStep('impact-point');
         setMarkingBall(true);
         setDetectionStatus(`Impact-Frame ${localFrame} gespeichert. Ball im Bild anklicken.`);
@@ -1467,7 +1532,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
                 if (event.currentTarget.currentTime >= current.range.outFrame / current.range.sourceFps) advanceCutOrSequence();
             }} onEnded={advanceCutOrSequence} /></div>}
             {currentAudio && <audio className="canonical-preview-audio" key={`${current.sequence.id}:${currentAudio.audioCutId}`} ref={audioRef} src={fileUrl(currentAudio.media.path)} onLoadedMetadata={startCurrentAudio} />}
-            <ShotTracerLayer tracer={activeTracer} frame={localFrame} editing={tracerEditing} marking={markingBall} tracking={Boolean(tracerWorkflowStep || cameraLockStep)} candidates={[]} cameraMarkers={cameraMarkers} videoRef={videoRef} sequence={current.sequence} mediaRange={current.range} onMark={(x, y) => cameraLockStep ? handleCameraLockPoint(x, y) : handleTracerWorkflowPoint(x, y)} onCandidate={() => undefined} onCursor={setTrackingCursor} onPoint={(pointIndex, x, y) => {
+            <ShotTracerLayer tracer={tracerWorkflowStep || cameraLockStep ? currentTracer : activeTracer} frame={localFrame} editing={tracerEditing} marking={markingBall} tracking={Boolean(tracerWorkflowStep || cameraLockStep)} candidates={[]} cameraMarkers={cameraMarkers} videoRef={videoRef} sequence={current.sequence} mediaRange={current.range} onMark={(x, y) => cameraLockStep ? handleCameraLockPoint(x, y) : handleTracerWorkflowPoint(x, y)} onCandidate={() => undefined} onCursor={setTrackingCursor} onPoint={(pointIndex, x, y) => {
                 if (!current || !activeTracer) return;
                 const worldPoint = screenToWorld(activeTracer.cameraLock, localFrame, { x, y });
                 setProject(updateShotTracer(project, current.sequence.id, { points: activeTracer.points.map((point, index) => index === pointIndex ? { ...point, ...worldPoint } : point) }));
@@ -1475,7 +1540,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
             {(tracerWorkflowStep === 'impact-point' || tracerWorkflowStep === 'landing-point' || tracerWorkflowStep === 'intermediate-point' || cameraLockStep) && <TrackingMagnifier video={videoRef.current} cursor={trackingCursor} frame={localFrame} />}
             <div className="golf-overlay-layer fixed-editorial-overlays"><div className="fixed-scorebug"><i /><div><b>{current.player?.name.toUpperCase()}</b><span>H{current.block.hole} · PAR {holeData?.par ?? '–'}{holeData?.lengthMeters ? ` · ${holeData.lengthMeters} M` : ''}</span></div><strong>{scoreText}</strong></div>{shotMeta && localFrame / current.sequence.sourceFps <= EDITORIAL_STYLE.shotInfoSeconds && <div className="fixed-shot-info"><span>SCHLAG {current.block.details.shotNumber ?? '–'}</span><b>{current.block.details.club || current.block.label}</b>{current.block.details.distanceMeters && <em>{current.block.details.distanceMeters} M</em>}</div>}</div>
             <div ref={editorialFadeRef} className={`editorial-transition ${holeTitleItem ? 'show-card' : ''}`}><div className="hole-title-card"><span>{project.settings.course.toUpperCase()}</span><b>HOLE {holeTitleItem?.block.hole}</b><em>PAR {titleHoleData?.par ?? '–'}{titleHoleData?.lengthMeters ? ` · ${titleHoleData.lengthMeters} M` : ''}</em></div></div>
-        </div><div className="preview-transport"><button onClick={() => goTo(index - 1)} disabled={index === 0}><SkipBack size={18} /></button><button className="preview-play" onClick={togglePlay}>{playing ? <Pause size={19} /> : <Play size={19} />}</button><button onClick={() => goTo(index + 1)} disabled={index === items.length - 1}><SkipForward size={18} /></button><strong>{formatDuration(position)} / {formatDuration(totalDuration)}</strong><span>Sequenz {index + 1} von {items.length}</span></div>
+        </div>{(current.sequence.multicamAngles?.length ?? 0) > 1 && <CameraPlanTimeline project={project} sequence={current.sequence} activeCutId={current.cutId} setProject={setProject} onSeek={seekLocalFrame} />}<div className="preview-transport"><button onClick={() => goTo(index - 1)} disabled={index === 0}><SkipBack size={18} /></button><button className="preview-play" onClick={togglePlay}>{playing ? <Pause size={19} /> : <Play size={19} />}</button><button onClick={() => goTo(index + 1)} disabled={index === items.length - 1}><SkipForward size={18} /></button><strong>{formatDuration(position)} / {formatDuration(totalDuration)}</strong><span>Sequenz {index + 1} von {items.length}</span></div>
         <input className="rough-progress" type="range" min={0} max={Math.max(1, Math.round(totalDuration * 1000))} value={Math.round(position * 1000)} onChange={(event) => seekGlobal(Number(event.target.value) / 1000)} /></div>
         <aside className="preview-inspector"><div className="inspector-section"><span className="field-label">Aktuelle Sequenz</span><h3>{current.media.name}</h3><p>{frameTime(current.range.inFrame, current.range.sourceFps)} – {frameTime(current.range.outFrame, current.range.sourceFps)}</p><button className="secondary edit-current" onClick={() => onEdit(current.sequence.id)}><Scissors size={14} /> Im Sichtungseditor öffnen</button></div>
             <div className={`inspector-section moment-review ${currentReviewed ? 'reviewed' : currentMomentPlan?.valid ? 'pending' : 'blocked'}`}><span className="field-label">Film-Review</span><div><ShieldCheck size={17} /><span><b>{currentReviewed ? 'Filmstand geprüft' : currentMomentPlan?.valid ? 'Noch nicht geprüft' : 'Vor dem Export beheben'}</b><small>{currentReviewed ? 'Bild, Ton und Effekte entsprechen diesem Stand.' : currentMomentPlan?.valid ? 'Nach der Prüfung bewusst bestätigen.' : `${currentMomentPlan?.diagnostics.filter((item) => item.severity === 'error').length ?? 0} blockierende Punkte`}</small></span></div>{!currentReviewed && currentMomentPlan?.valid && <button className="primary" onClick={() => setProject(markSequenceReviewed(project, current.sequence.id, currentMomentPlan.renderFingerprint))}><Check size={14} /> Diesen Moment als geprüft markieren</button>}</div>
@@ -1483,10 +1548,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
                 const media = project.media.find((item) => item.id === angle.mediaId);
                 if (!media) return null;
                 return <button className={media.id === current.media.id ? 'active' : ''} onClick={() => switchCamera(media.id)} key={media.id}><span>{angleIndex + 1}</span><div><b>{media.device || `Kamera ${angleIndex + 1}`}</b><small>{media.name}</small></div>{media.id === current.media.id && <Check size={14} />}</button>;
-            })}</div>{previewMediaId && <div className="camera-plan-commit"><button onClick={commitPreviewFromHere}><Scissors size={14} /> Ab hier übernehmen</button><button onClick={commitPreviewForMoment}><Check size={14} /> Ganzen Moment</button><button className="discard" onClick={() => setPreviewMediaId(undefined)}><X size={14} /> Verwerfen</button></div>}<span className="camera-plan-label">FINALER FILM</span><div className="camera-plan-strip">{(current.sequence.videoCuts ?? []).map((cut, cutIndex) => {
-                const media = project.media.find((item) => item.id === cut.mediaId);
-                return <button key={cut.id} style={{ flexGrow: Math.max(1, cut.endUs - cut.startUs) }} title={`${media?.name ?? 'Kamera offen'} · ${((cut.endUs - cut.startUs) / 1_000_000).toFixed(1)} s`} onClick={() => seekLocalFrame(Math.round(cut.startUs / 1_000_000 * current.sequence.sourceFps))}><b>{media?.device || `Cam ${cutIndex + 1}`}</b><small>{((cut.endUs - cut.startUs) / 1_000_000).toFixed(1)} s</small></button>;
-            })}</div></div>}
+            })}</div>{previewMediaId && <div className="camera-plan-commit"><button onClick={commitPreviewFromHere}><Scissors size={14} /> Ab hier übernehmen</button><button onClick={commitPreviewForMoment}><Check size={14} /> Ganzen Moment</button><button className="discard" onClick={() => setPreviewMediaId(undefined)}><X size={14} /> Verwerfen</button></div>}</div>}
             <div className="inspector-section fixed-style-summary"><span className="field-label">Fester Editorial-Look</span><div><ShieldCheck size={17} /><span><b>Automatisch aktiv</b><small>Scorebug · Schlaginfo · Lochtrenner · Audio-Microfade</small></span></div><p>Innerhalb eines Lochs bleiben die Schnitte direkt. Beim Lochwechsel folgen Dip-to-Black und Lochkarte.</p></div>
             <ShotTracerControls project={project} sequence={current.sequence} tracer={currentTracer} frame={localFrame} editing={tracerEditing} workflowStep={tracerWorkflowStep} cameraLockStep={cameraLockStep} detectionStatus={detectionStatus} setProject={setProject} onEdit={(value) => { setTracerEditing(value); if (!value) { setTracerWorkflowStep(undefined); setCameraLockStep(undefined); setTrackingCursor(undefined); } setMarkingBall(false); setBallCandidates([]); if (value) { setPlaying(false); mediaElement()?.pause(); } }} onStart={startTracerWorkflow} onConfirmImpactFrame={confirmImpactFrame} onConfirmLandingFrame={confirmLandingFrame} onBeginIntermediate={beginIntermediatePoint} onConfirmIntermediateFrame={confirmIntermediateFrame} onFinish={finishTracerWorkflow} onStartCameraLock={startCameraLock} onClearCameraLock={clearCameraLock} onSeekFrame={seekLocalFrame} />
         </aside></div>

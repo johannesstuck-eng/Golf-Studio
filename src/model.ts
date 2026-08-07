@@ -427,6 +427,35 @@ export function setSequenceCameraForMoment(project: GolfProject, sequenceId: str
     return sequence ? setSequenceCameraRange(project, sequenceId, mediaId, 0, sequenceDurationUs(sequence)) : project;
 }
 
+/** Moves the shared boundary between two adjacent picture cuts without changing their cameras or ids. */
+export function setSequenceCameraCutBoundary(project: GolfProject, sequenceId: string, leftCutId: string, rightCutId: string, boundaryUs: number): GolfProject {
+    const sequence = project.sequences.find((item) => item.id === sequenceId);
+    if (!sequence?.videoCuts || sequence.videoCuts.length < 2) return project;
+    const cuts = [...sequence.videoCuts].sort((left, right) => left.startUs - right.startUs);
+    const leftIndex = cuts.findIndex((cut) => cut.id === leftCutId);
+    const rightIndex = cuts.findIndex((cut) => cut.id === rightCutId);
+    if (leftIndex < 0 || rightIndex !== leftIndex + 1) return project;
+    const left = cuts[leftIndex];
+    const right = cuts[rightIndex];
+    if (left.endUs !== right.startUs || left.locked || right.locked) return project;
+    const minimumDurationUs = Math.max(1, Math.round(MICROSECONDS_PER_SECOND / sequence.sourceFps));
+    const nextBoundary = Math.max(left.startUs + minimumDurationUs, Math.min(right.endUs - minimumDurationUs, Math.round(boundaryUs)));
+    if (nextBoundary === left.endUs) return project;
+    const nextCuts = cuts.map((cut, index) => index === leftIndex
+        ? { ...cut, endUs: nextBoundary, origin: 'manual' as const }
+        : index === rightIndex
+            ? { ...cut, startUs: nextBoundary, origin: 'manual' as const }
+            : cut);
+    const now = new Date().toISOString();
+    return {
+        ...project,
+        sequences: project.sequences.map((item) => item.id === sequenceId
+            ? { ...item, videoCuts: nextCuts, review: { status: 'unreviewed', reviewedFingerprint: null }, updatedAt: now }
+            : item),
+        modifiedAt: now,
+    };
+}
+
 export function markSequenceReviewed(project: GolfProject, sequenceId: string, renderFingerprint: string): GolfProject {
     if (!/^rp1-[0-9a-f]{16}$/.test(renderFingerprint) || !project.sequences.some((item) => item.id === sequenceId)) return project;
     const currentPlan = compileRenderPlan(project, [sequenceId]);

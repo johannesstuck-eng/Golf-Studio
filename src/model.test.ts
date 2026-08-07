@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, applyScorecardTee, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraForMoment, setSequenceCameraFrom, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
+import { addBlock, applyScorecardTee, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
 import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
@@ -377,5 +377,40 @@ describe('project model', () => {
         expect(final.sequences[0].audioPlan).toEqual(sequence.audioPlan);
         expect(final.sequences[0].review).toEqual({ status: 'unreviewed', reviewedFingerprint: null });
         expect(setSequenceCameraForMoment(final, 'moment', 'b').sequences[0].videoCuts?.map((cut) => cut.mediaId)).toEqual(['b']);
+    });
+
+    it('drags a camera cut boundary while preserving a valid contiguous plan', () => {
+        const base = createProject(settings);
+        const sequence = {
+            id: 'moment', sourceType: 'group' as const, sourceId: 'group', inFrame: 0, outFrame: 300, sourceFps: 30,
+            activeMediaId: 'a', multicamAngles: [{ mediaId: 'a', inFrame: 0, outFrame: 300, sourceFps: 30 }, { mediaId: 'b', inFrame: 0, outFrame: 300, sourceFps: 30 }],
+            videoCuts: [
+                { id: 'a-cut', mediaId: 'a', startUs: 0, endUs: 4_000_000, origin: 'automatic' as const },
+                { id: 'b-cut', mediaId: 'b', startUs: 4_000_000, endUs: 10_000_000, origin: 'automatic' as const },
+            ],
+            review: { status: 'approved' as const, reviewedFingerprint: 'old' }, targetBlockId: base.blocks[0].id, createdAt: '', updatedAt: '',
+        };
+        const project = { ...base, sequences: [sequence] };
+        const moved = setSequenceCameraCutBoundary(project, 'moment', 'a-cut', 'b-cut', 6_250_000);
+        expect(moved.sequences[0].videoCuts).toEqual([
+            { ...sequence.videoCuts[0], endUs: 6_250_000, origin: 'manual' },
+            { ...sequence.videoCuts[1], startUs: 6_250_000, origin: 'manual' },
+        ]);
+        expect(videoCutPlanIsValid(moved.sequences[0].videoCuts!, 10_000_000)).toBe(true);
+        expect(moved.sequences[0].review).toEqual({ status: 'unreviewed', reviewedFingerprint: null });
+    });
+
+    it('keeps at least one timeline frame on either side of a dragged boundary', () => {
+        const base = createProject(settings);
+        const sequence = {
+            id: 'moment', sourceType: 'group' as const, sourceId: 'group', inFrame: 0, outFrame: 300, sourceFps: 30,
+            videoCuts: [
+                { id: 'a-cut', mediaId: 'a', startUs: 0, endUs: 5_000_000, origin: 'manual' as const },
+                { id: 'b-cut', mediaId: 'b', startUs: 5_000_000, endUs: 10_000_000, origin: 'manual' as const },
+            ], targetBlockId: base.blocks[0].id, createdAt: '', updatedAt: '',
+        };
+        const moved = setSequenceCameraCutBoundary({ ...base, sequences: [sequence] }, 'moment', 'a-cut', 'b-cut', 10_000_000);
+        expect(moved.sequences[0].videoCuts?.[0].endUs).toBe(9_966_667);
+        expect(moved.sequences[0].videoCuts?.[1].startUs).toBe(9_966_667);
     });
 });
