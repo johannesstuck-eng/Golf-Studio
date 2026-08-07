@@ -10,6 +10,28 @@
     --muted: #8e9993;
 }
 
+/* Par playbook: each real stroke round is a distinct editing phase. */
+.true-order-flow { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)) !important; }
+.playbook-round-heading { grid-column: 1 / -1; display: flex; min-height: 62px; margin-top: 10px; padding: 9px 12px; align-items: center; gap: 11px; background: linear-gradient(90deg, #1b2a1d, #111813 66%, #0e130f); border: 1px solid #3d4d40; border-left: 3px solid var(--lime); border-radius: 7px; }
+.playbook-round-heading:first-child { margin-top: 0; }
+.playbook-round-heading > span { display: grid; width: 38px; height: 38px; place-items: center; color: #0d130e; background: var(--lime); border-radius: 7px; font: 900 12px Consolas, monospace; }
+.playbook-round-heading > div { display: flex; flex: 1; flex-direction: column; gap: 4px; }
+.playbook-round-heading b { color: #f0f4f1; font-size: 11px; }
+.playbook-round-heading small { color: #839087; font-size: 7px; letter-spacing: .05em; text-transform: uppercase; }
+.playbook-round-heading em { padding: 5px 8px; color: #9ead9f; background: #0b100d; border: 1px solid #334037; border-radius: 99px; font-size: 7px; font-style: normal; font-weight: 800; }
+.playbook-round-heading.over-par { border-left-color: #e0a84e; }
+.playbook-round-heading.over-par > span { background: #e0a84e; }
+.playbook-add-shot { display: grid; padding: 13px; grid-template-columns: minmax(220px, 1fr) 150px 180px 130px auto; align-items: end; gap: 10px; background: #121915; border-top: 1px solid #344039; }
+.playbook-add-shot > div { display: flex; min-height: 37px; align-items: center; gap: 9px; color: var(--lime); }
+.playbook-add-shot > div span { display: flex; flex-direction: column; gap: 4px; }
+.playbook-add-shot > div b { color: #e4eae6; font-size: 10px; }
+.playbook-add-shot > div small { color: #77837b; font-size: 7px; }
+.playbook-add-shot label { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.playbook-add-shot label > span { color: #758178; font-size: 6px; font-weight: 900; letter-spacing: .11em; text-transform: uppercase; }
+.playbook-add-shot select { width: 100%; height: 34px; padding: 0 8px; color: #dfe6e1; background: #0c120e; border: 1px solid #3b4840; border-radius: 6px; font-size: 8px; }
+.playbook-add-shot > button { display: flex; height: 34px; padding: 0 13px; align-items: center; justify-content: center; gap: 6px; color: #10150f; background: var(--lime); border: 0; border-radius: 6px; font-size: 8px; font-weight: 900; }
+@media (max-width: 1250px) { .playbook-add-shot { grid-template-columns: repeat(3, minmax(150px, 1fr)); }.playbook-add-shot > div { grid-column: 1 / -1; }.playbook-add-shot > button { align-self: end; } }
+
 .sync-progress { height: 3px; overflow: hidden; border-radius: 999px; background: #263129; }
 .sync-progress span { display: block; height: 100%; border-radius: inherit; background: #b7ff39; transition: width .25s ease; }
 .audio-sync-panel { margin-bottom: 12px; overflow: hidden; border: 1px solid #27362f; border-radius: 10px; background: #101713; }

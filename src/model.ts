@@ -580,6 +580,34 @@ export function addBlock(project: GolfProject, hole: number, playerId: string, t
     return touch(project, [...project.blocks, block]);
 }
 
+export function addBlockAtOrder(project: GolfProject, hole: number, playerId: string, type: BlockType, order: number): GolfProject {
+    const lane = project.blocks.filter((block) => block.hole === hole && block.playerId === playerId);
+    const insertionOrder = Math.max(0, Math.min(lane.length, Math.round(order)));
+    const block: GolfBlock = {
+        id: id(), hole, playerId, type,
+        label: nextBlockLabel(project, hole, playerId, type),
+        order: insertionOrder,
+        sequenceIds: [],
+        details: defaultShotDetails(type, SHOT_BLOCKS.has(type) ? insertionOrder + 1 : null),
+    };
+    const blocks = project.blocks.map((item) => {
+        if (item.hole !== hole || item.playerId !== playerId || item.order < insertionOrder) return item;
+        const details = SHOT_BLOCKS.has(item.type) && item.details.shotNumber !== null
+            ? { ...item.details, shotNumber: item.details.shotNumber + 1 }
+            : item.details;
+        return { ...item, order: item.order + 1, details };
+    });
+    const next = touch(project, [...blocks, block]);
+    if (!hasHoleBlockOrderOverride(project, hole)) return next;
+
+    const existingOrder = effectiveHoleBlockOrder(project, hole);
+    const blocksById = new Map(next.blocks.map((item) => [item.id, item]));
+    const insertBefore = existingOrder.findIndex((blockId) => (blocksById.get(blockId)?.order ?? Number.POSITIVE_INFINITY) > insertionOrder);
+    const holeOrder = [...existingOrder];
+    holeOrder.splice(insertBefore < 0 ? holeOrder.length : insertBefore, 0, block.id);
+    return storeHoleBlockOrder(next, hole, holeOrder);
+}
+
 export function duplicateBlock(project: GolfProject, blockId: string): GolfProject {
     const original = project.blocks.find((block) => block.id === blockId);
     if (!original) return project;
