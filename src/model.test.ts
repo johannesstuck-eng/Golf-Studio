@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, addCountedStroke, applyScorecardTee, automaticPlayerOrder, clearHoleBlockOrderOverride, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectiveHoleBlockOrder, effectivePlayerOrder, hasHoleBlockOrderOverride, hasPlayerOrderOverride, moveBlock, moveBlockInHoleOrder, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerHoleStrokeCount, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMediaAssignedHole, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateProjectSettings, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
+import { addBlock, addCountedStroke, applyScorecardTee, automaticPlayerOrder, clearHoleBlockOrderOverride, clearPlayerOrderOverride, createMulticamGroup, createProject, deleteBlock, duplicateBlock, effectiveHoleBlockOrder, effectivePlayerOrder, hasHoleBlockOrderOverride, hasPlayerOrderOverride, moveBlock, moveBlockInHoleOrder, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerHoleStrokeCount, playerScoreToPar, proposeShotTracer, removeMulticamGroup, roughCutSequenceIds, sequenceDurationUs, setMediaAssignedHole, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateProjectSettings, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
 import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
@@ -162,6 +162,26 @@ describe('project model', () => {
         ];
         expect(suggestMulticam(media)).toHaveLength(1);
         expect(suggestMulticam(media)[0].mediaIds).toEqual(['camera-a', 'camera-b']);
+    });
+
+    it('does not turn a transitively overlapping round into a mega multicam group', () => {
+        const media: MediaItem[] = Array.from({ length: 13 }, (_, index) => ({
+            id: `camera-${index}`, name: `camera-${index}.mp4`, path: `camera-${index}.mp4`, kind: 'video',
+            device: `Camera ${index}`, deviceKey: `camera-${index}`, recordedAt: new Date(Date.parse('2026-08-07T08:00:00.000Z') + index * 10_000).toISOString(),
+            durationSeconds: 120, width: 1920, height: 1080, fps: 30, codec: 'h264', audioCodec: 'aac', hasAudio: true, sizeBytes: 1,
+        }));
+        expect(suggestMulticam(media)).toEqual([]);
+    });
+
+    it('creates and removes a bounded manual multicam group', () => {
+        const media = ['a', 'b'].map((mediaId): MediaItem => ({
+            id: mediaId, name: `${mediaId}.mp4`, path: `${mediaId}.mp4`, kind: 'video', device: mediaId, deviceKey: mediaId,
+            recordedAt: '2026-08-07T08:00:00.000Z', durationSeconds: 10, width: 1920, height: 1080, fps: 30,
+            codec: 'h264', audioCodec: 'aac', hasAudio: true, sizeBytes: 1,
+        }));
+        const grouped = createMulticamGroup({ ...createProject(settings), media }, ['a', 'b']);
+        expect(grouped.groups[0]).toMatchObject({ mediaIds: ['a', 'b'], syncStatus: 'timestamp-only' });
+        expect(removeMulticamGroup(grouped, grouped.groups[0].id).groups).toEqual([]);
     });
 
     it('persists and validates the manual hole assignment of imported clips', () => {

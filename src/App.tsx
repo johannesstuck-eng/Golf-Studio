@@ -6,9 +6,9 @@ import {
     Crosshair, Scissors, Settings2, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Trophy, Users, WandSparkles, X,
 } from 'lucide-react';
 import {
-    addBlock, addCountedStroke, applyScorecardTee, blockLabel, clearHoleBlockOrderOverride, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
+    addBlock, addCountedStroke, applyScorecardTee, blockLabel, clearHoleBlockOrderOverride, clearPlayerOrderOverride, createMulticamGroup, createProject, deleteBlock, duplicateBlock,
     effectiveHoleBlockOrder, effectivePlayerOrder, hasHoleBlockOrderOverride, hasPlayerOrderOverride, markSequenceReviewed, moveBlock, moveBlockInHoleOrder, moveBlockInHoleOrderBy, movePlayerInOrder, moveSequence,
-    multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom,
+    MAX_MULTICAM_SOURCES, multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeMulticamGroup, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom,
     playerHoleStrokeCount, setMediaAssignedHole, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore,
     updateProjectSettings, updateSequenceOverlay, updateShotTracer, upsertSequence,
 } from './model';
@@ -429,6 +429,8 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId, 
     const [playSelection, setPlaySelection] = useState(false);
     const [hole, setHole] = useState(requestedBlock?.hole ?? initialHole ?? requestedMedia?.assignedHole ?? 1);
     const [holeFilter, setHoleFilter] = useState<ReviewHoleFilter>(initialHole ?? 'all');
+    const [multicamPicking, setMulticamPicking] = useState(false);
+    const [multicamSelection, setMulticamSelection] = useState<string[]>([]);
     const [playerId, setPlayerId] = useState(requestedBlock?.playerId ?? project.settings.players[0]?.id ?? '');
     const [blockType, setBlockType] = useState<BlockType>(requestedBlock?.type ?? 'tee-shot');
     const [targetBlockId, setTargetBlockId] = useState(requestedBlock?.id ?? '');
@@ -598,6 +600,29 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId, 
         setProject(setMulticamSyncOffset(project, sourceId, source.id, draftSyncOffset));
         setMessage(`Feinsynchronisierung für ${source.name} gespeichert.`);
     };
+    const toggleMulticamClip = (mediaId: string) => {
+        setMulticamSelection((selected) => selected.includes(mediaId) ? selected.filter((id) => id !== mediaId) : selected.length < MAX_MULTICAM_SOURCES ? [...selected, mediaId] : selected);
+    };
+    const createSelectedMulticam = () => {
+        try {
+            const next = createMulticamGroup(project, multicamSelection);
+            const group = next.groups.at(-1)!;
+            setProject(next);
+            setMulticamPicking(false); setMulticamSelection([]); setSourceType('group'); setSourceId(group.id); setActiveMediaId(group.mediaIds[0]);
+            setMessage(`${group.name} wird jetzt lokal über die Tonspuren synchronisiert …`);
+        } catch (error) {
+            setMessage(error instanceof Error ? error.message : 'Die Multicam-Gruppe konnte nicht erstellt werden.');
+        }
+    };
+    const deleteCurrentGroup = () => {
+        if (!currentGroup || !window.confirm(`${currentGroup.name} wirklich entfernen? Die Originalclips bleiben erhalten.`)) return;
+        try {
+            setProject(removeMulticamGroup(project, currentGroup.id));
+            setSourceType('media'); setSourceId(filteredMedia[0]?.id ?? project.media[0]?.id ?? ''); setMessage(`${currentGroup.name} wurde entfernt.`);
+        } catch (error) {
+            setMessage(error instanceof Error ? error.message : 'Die Multicam-Gruppe konnte nicht entfernt werden.');
+        }
+    };
     const localReferenceId = source ? syncAnalysis?.referenceByMediaId[source.id] ?? syncAnalysis?.referenceMediaId : syncAnalysis?.referenceMediaId;
     const referenceMedia = groupMedia.find((media) => media.id === localReferenceId);
     const referenceLocalTime = referenceMedia ? mediaTimeForFrame(currentFrame, referenceMedia) : 0;
@@ -608,7 +633,10 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId, 
     return <section className="review-workspace">
         <aside className="source-browser"><div className="source-tabs"><button className={sourceType === 'media' ? 'active' : ''} onClick={() => setSourceType('media')}>Clips</button><button className={sourceType === 'group' ? 'active' : ''} onClick={() => setSourceType('group')}>Multicam</button></div>
             <label className="source-hole-filter"><Flag size={14} /><select value={String(holeFilter)} onChange={(event) => setHoleFilter(event.target.value === 'all' || event.target.value === 'unassigned' ? event.target.value : Number(event.target.value))}><option value="all">Alle Löcher</option><option value="unassigned">Nicht zugeordnet</option>{Array.from({ length: project.settings.holes }, (_, index) => <option value={index + 1} key={index}>Loch {index + 1}</option>)}</select><span>{sourceType === 'media' ? filteredMedia.length : filteredGroups.length}</span></label>
-            <div className="source-list">{sourceType === 'media' ? filteredMedia.map((media) => <button className={sourceId === media.id ? 'active' : ''} onClick={() => setSourceId(media.id)} key={media.id}><MediaIcon media={media} /><span><b>{media.name}</b><small>{media.assignedHole ? `LOCH ${media.assignedHole} · ` : ''}{formatDuration(media.durationSeconds)} · {media.fps ?? '?'} fps</small></span><em className={media.assignedHole ? 'hole-assigned' : ''}>{media.assignedHole ? `L${media.assignedHole}` : project.sequences.filter((sequence) => sequence.sourceType === 'media' && sequence.sourceId === media.id).length}</em></button>) : filteredGroups.map((group) => <button className={sourceId === group.id ? 'active' : ''} onClick={() => setSourceId(group.id)} key={group.id}><div className="group-icon"><Layers size={20} /></div><span><b>{group.name}</b><small>{group.mediaIds.length} Quellen</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'group' && sequence.sourceId === group.id).length}</em></button>)}</div>
+            {sourceType === 'media' && <div className="manual-multicam-start"><button className={multicamPicking ? 'active' : ''} onClick={() => { setMulticamPicking((active) => !active); setMulticamSelection([]); }}><Layers size={14} /> {multicamPicking ? 'Auswahl beenden' : 'Clips zu Multicam verbinden'}</button>{multicamPicking && <small>2–{MAX_MULTICAM_SOURCES} Clips auswählen</small>}</div>}
+            <div className="source-list">{sourceType === 'media' ? filteredMedia.map((media) => <button className={`${sourceId === media.id && !multicamPicking ? 'active' : ''} ${multicamSelection.includes(media.id) ? 'multicam-selected' : ''}`} onClick={() => multicamPicking ? toggleMulticamClip(media.id) : setSourceId(media.id)} disabled={multicamPicking && media.kind !== 'video'} key={media.id}><MediaIcon media={media} /><span><b>{media.name}</b><small>{media.assignedHole ? `LOCH ${media.assignedHole} · ` : ''}{formatDuration(media.durationSeconds)} · {media.fps ?? '?'} fps</small></span><em className={multicamSelection.includes(media.id) || media.assignedHole ? 'hole-assigned' : ''}>{multicamSelection.includes(media.id) ? <Check size={11} /> : media.assignedHole ? `L${media.assignedHole}` : project.sequences.filter((sequence) => sequence.sourceType === 'media' && sequence.sourceId === media.id).length}</em></button>) : filteredGroups.map((group) => <button className={sourceId === group.id ? 'active' : ''} onClick={() => setSourceId(group.id)} key={group.id}><div className="group-icon"><Layers size={20} /></div><span><b>{group.name}</b><small>{group.mediaIds.length} Quellen</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'group' && sequence.sourceId === group.id).length}</em></button>)}</div>
+            {sourceType === 'media' && multicamPicking && <div className="manual-multicam-commit"><span><b>{multicamSelection.length}</b> ausgewählt</span><button disabled={multicamSelection.length < 2} onClick={createSelectedMulticam}><WandSparkles size={14} /> Erstellen & Ton synchronisieren</button></div>}
+            {sourceType === 'group' && currentGroup && <div className="manual-multicam-delete"><button onClick={deleteCurrentGroup}><Trash2 size={13} /> Gruppe entfernen</button></div>}
         </aside>
         <div className="review-main">{source ? <>{contextHoleSummary && <div className="moment-round-context"><span>GEPRÜFT {contextSummary.productionProgress}%</span><i /><b>LOCH {contextHoleSummary.hole}</b><small>{PRODUCTION_STATUS_COPY[contextHoleSummary.productionStatus]}</small></div>}<div className="review-heading"><div><div className="eyebrow"><span /> SICHTEN & ZUWEISEN</div><h1>{sourceType === 'group' ? project.groups.find((group) => group.id === sourceId)?.name : source.name}</h1><p>{sourceType === 'group' ? `${visibleGroupMedia.length || groupMedia.length} Kameras am aktuellen Zeitpunkt · aktive Perspektive: ${source.name}` : `${source.device} · ${source.width ?? 'Audio'}${source.height ? `×${source.height}` : ''} · ${fps} fps`}</p>{sourceAssignedHole && <span className="review-source-hole">VORSORTIERT · LOCH {sourceAssignedHole}</span>}</div><div className="keyboard-hints"><kbd>←</kbd><kbd>→</kbd> Frame · <kbd>I</kbd> In · <kbd>O</kbd> Out · <kbd>Leertaste</kbd> Play</div></div>
             {sourceType === 'group' && <div className="camera-monitor-grid">{(visibleGroupMedia.length ? visibleGroupMedia : groupMedia.slice(0, 4)).map((media) => <button className={media.id === source.id ? 'active' : ''} onClick={() => { player()?.pause(); setActiveMediaId(media.id); }} key={media.id}><video muted preload="metadata" src={fileUrl(media.path)} ref={(element) => { if (element) previewRefs.current.set(media.id, element); else previewRefs.current.delete(media.id); }} onLoadedMetadata={(event) => { event.currentTarget.currentTime = mediaTimeForFrame(currentFrame, media); }} /><span><b>{media.device}</b><small>{media.name}</small></span>{media.id === source.id && <em>AKTIV</em>}</button>)}</div>}
