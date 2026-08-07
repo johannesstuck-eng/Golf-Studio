@@ -87,6 +87,24 @@ test('keeps equal 59.94 fps frame ranges aligned without a one-microsecond cover
     assert.equal(plan.videoSegments[0].mediaId, 'camera-b');
 });
 
+test('accepts sub-millisecond media-duration rounding but still rejects real overrun', () => {
+    const project = multicamProject({
+        sequence: {
+            durationUs: 9 * second,
+            multicamAngles: [angle('camera-a'), angle('camera-b')],
+            videoCuts: [{ id: 'cut-a', startUs: 0, endUs: 9 * second, mediaId: 'camera-a' }],
+            audioPlan: { mediaId: 'camera-a', status: 'ready' },
+        },
+        project: { media: [media('camera-a', { durationSeconds: 8.99964 }), media('camera-b')] },
+    });
+    const rounded = compileRenderPlan(project, ['moment-1']);
+    assert.equal(rounded.valid, true);
+    project.media[0].durationSeconds = 8.998;
+    const overrun = compileRenderPlan(project, ['moment-1']);
+    assert.equal(overrun.valid, false);
+    assert.ok(overrun.diagnostics.some((item) => item.code === 'SOURCE_RANGE_OUTSIDE_MEDIA'));
+});
+
 test('produces byte-for-byte deterministic preview and export plans from unordered cuts', () => {
     const project = multicamProject();
     project.sequences[0].videoCuts = [...project.sequences[0].videoCuts].reverse();

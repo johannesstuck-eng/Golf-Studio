@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, applyScorecardTee, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
+import { addBlock, addCountedStroke, applyScorecardTee, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerHoleStrokeCount, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
 import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
@@ -12,6 +12,17 @@ const settings: ProjectSettings = {
 };
 
 describe('project model', () => {
+    it('adds explicit unfilmed and penalty strokes to the player hole count', () => {
+        const base = createProject(settings);
+        const withMissing = addCountedStroke(base, 1, 'joe', 'unfilmed');
+        const withPenalty = addCountedStroke(withMissing, 1, 'joe', 'penalty');
+        expect(playerHoleStrokeCount(withPenalty, 1, 'joe')).toBe(6);
+        const added = withPenalty.blocks.filter((block) => !base.blocks.some((item) => item.id === block.id));
+        expect(added.map((block) => block.label)).toEqual(['Nicht gefilmter Schlag', 'Strafschlag']);
+        expect(added.map((block) => strokeNumberForBlock(withPenalty, block.id))).toEqual([5, 6]);
+        expect(added.every((block) => block.sequenceIds.length === 0)).toBe(true);
+    });
+
     it('upgrades old projects without losing media', () => {
         const old = { schemaVersion: 1, settings, media: [{ id: 'media-1' }], suggestions: [], groups: [] };
         const project = normalizeProject(old);

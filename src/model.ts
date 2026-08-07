@@ -721,6 +721,35 @@ export function setScorecardSource(project: GolfProject, scorecardSourcePath: st
     return { ...project, courseData: { ...project.courseData, scorecardSourcePath }, modifiedAt: new Date().toISOString() };
 }
 
+export function strokeNumberForBlock(project: GolfProject, blockId: string): number | null {
+    const block = project.blocks.find((item) => item.id === blockId);
+    if (!block || !SHOT_BLOCKS.has(block.type)) return null;
+    if (Number.isFinite(block.details.shotNumber) && (block.details.shotNumber ?? 0) >= 1) return Math.round(block.details.shotNumber!);
+    const counted = project.blocks
+        .filter((item) => item.hole === block.hole && item.playerId === block.playerId && SHOT_BLOCKS.has(item.type))
+        .sort((left, right) => left.order - right.order);
+    const index = counted.findIndex((item) => item.id === blockId);
+    return index < 0 ? null : index + 1;
+}
+
+export function playerHoleStrokeCount(project: GolfProject, hole: number, playerId: string): number {
+    return project.blocks.filter((block) => block.hole === hole && block.playerId === playerId && SHOT_BLOCKS.has(block.type)).length;
+}
+
+export function addCountedStroke(project: GolfProject, hole: number, playerId: string, kind: 'unfilmed' | 'penalty'): GolfProject {
+    const existingIds = new Set(project.blocks.map((block) => block.id));
+    const next = addBlock(project, hole, playerId, kind === 'penalty' ? 'penalty' : 'extra-shot');
+    const created = next.blocks.find((block) => !existingIds.has(block.id));
+    if (!created) return project;
+    const label = kind === 'penalty' ? 'Strafschlag' : 'Nicht gefilmter Schlag';
+    return {
+        ...next,
+        blocks: next.blocks.map((block) => block.id === created.id
+            ? { ...block, label, details: { ...block.details, notes: kind === 'penalty' ? 'Zählt als Strafschlag ohne Videomaterial.' : 'Schlag nicht auf Kamera – zählt im Schlagverlauf.' } }
+            : block),
+    };
+}
+
 export function applyScorecardTee(project: GolfProject, scorecardSourcePath: string, tee: ScorecardTeeCandidate): GolfProject {
     const holesByNumber = new Map(tee.holes.map((hole) => [hole.number, hole]));
     const complete = tee.holes.length === project.settings.holes

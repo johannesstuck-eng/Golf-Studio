@@ -6,10 +6,10 @@ import {
     Crosshair, Scissors, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Trophy, Users, WandSparkles, X,
 } from 'lucide-react';
 import {
-    addBlock, applyScorecardTee, blockLabel, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
+    addBlock, addCountedStroke, applyScorecardTee, blockLabel, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
     effectivePlayerOrder, hasPlayerOrderOverride, markSequenceReviewed, moveBlock, movePlayerInOrder, moveSequence,
     multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom,
-    suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore,
+    playerHoleStrokeCount, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore,
     updateSequenceOverlay, updateShotTracer, upsertSequence,
 } from './model';
 import {
@@ -44,7 +44,7 @@ import { createTracerFlight, insertTracerIntermediate } from './tracerWorkflow';
 import { lockTracerPointsToWorld, screenToWorld, svgCameraMatrix, worldToScreen } from './cameraLock';
 import { Dashboard } from './AgentDashboard';
 import { firstSequenceForHole, sequenceProductionStatus, summarizeRoundDesk, type ProductionStatus } from './roundDesk';
-import { sequencePlaybackAudioSource, sequencePlaybackSource, sequencePreviewSource, shouldAdvanceVideoCut } from './roughCut';
+import { nextPlayableMomentSeconds, sequencePlaybackAudioSource, sequencePlaybackSource, sequencePreviewSource, shouldAdvanceVideoCut } from './roughCut';
 import { compileRenderPlan } from './renderPlan';
 
 const makeId = () => crypto.randomUUID();
@@ -626,7 +626,9 @@ function BlockDetailsEditor({ project, blockId, setProject, onClose }: { project
     if (!block) return null;
     const player = project.settings.players.find((item) => item.id === block.playerId);
     const clubs = ['Driver', '3-Wood', '5-Wood', 'Hybrid', '3-Eisen', '4-Eisen', '5-Eisen', '6-Eisen', '7-Eisen', '8-Eisen', '9-Eisen', 'Pitching Wedge', 'Gap Wedge', 'Sand Wedge', 'Lob Wedge', 'Putter'];
-    return <div className="data-editor-backdrop"><section className="block-details-editor"><header><div><div className="eyebrow"><span /> SCHLAGDETAILS</div><h2>Loch {block.hole} · {player?.name} · {block.label}</h2><p>Wird für Golfgrafiken und den späteren Shot Tracer verwendet.</p></div><button className="preview-close" onClick={onClose}><X size={18} /></button></header><div className="block-details-form"><label><span>Schlagnummer</span><input type="number" min={1} value={block.details.shotNumber ?? ''} onChange={(event) => setProject(updateBlockDetails(project, block.id, { shotNumber: nullableNumber(event.target.value) }))} /></label><label><span>Schläger</span><input list="golf-clubs" value={block.details.club} placeholder="z. B. Driver" onChange={(event) => setProject(updateBlockDetails(project, block.id, { club: event.target.value }))} /><datalist id="golf-clubs">{clubs.map((club) => <option value={club} key={club} />)}</datalist></label><label><span>Distanz (Meter)</span><input type="number" min={0} value={block.details.distanceMeters ?? ''} placeholder="z. B. 238" onChange={(event) => setProject(updateBlockDetails(project, block.id, { distanceMeters: nullableNumber(event.target.value) }))} /></label><label><span>Ergebnis / Lage</span><select value={block.details.result} onChange={(event) => setProject(updateBlockDetails(project, block.id, { result: event.target.value }))}><option value="">Nicht angegeben</option>{['Fairway', 'Rough', 'Grün', 'Bunker', 'Penalty', 'Eingelocht'].map((result) => <option value={result} key={result}>{result}</option>)}</select></label><label className="wide"><span>Notiz</span><textarea value={block.details.notes} placeholder="Optionaler Kommentar zum Schlag" onChange={(event) => setProject(updateBlockDetails(project, block.id, { notes: event.target.value }))} /></label></div><footer><div className="detail-preview"><span>OVERLAY-VORSCHAU</span><b>{player?.name} · Schlag {block.details.shotNumber ?? '–'}</b><small>{[block.details.club, block.details.distanceMeters ? `${block.details.distanceMeters} m` : '', block.details.result].filter(Boolean).join(' · ') || 'Noch keine Schlagdetails'}</small></div><button className="primary" onClick={onClose}><Check size={15} /> Fertig</button></footer></section></div>;
+    const par = project.courseData.holes.find((hole) => hole.number === block.hole)?.par ?? 4;
+    const shotNumber = strokeNumberForBlock(project, block.id);
+    return <div className="data-editor-backdrop"><section className="block-details-editor"><header><div><div className="eyebrow"><span /> SCHLAGDETAILS</div><h2>Loch {block.hole} · {player?.name} · {block.label}</h2><p>Wird für Golfgrafiken und den späteren Shot Tracer verwendet.</p></div><button className="preview-close" onClick={onClose}><X size={18} /></button></header><div className="block-details-form"><label><span>Schlagnummer · manuell korrigierbar</span><input type="number" min={1} value={block.details.shotNumber ?? ''} placeholder={shotNumber ? String(shotNumber) : ''} onChange={(event) => setProject(updateBlockDetails(project, block.id, { shotNumber: nullableNumber(event.target.value) }))} /></label><label><span>Schläger</span><input list="golf-clubs" value={block.details.club} placeholder="z. B. Driver" onChange={(event) => setProject(updateBlockDetails(project, block.id, { club: event.target.value }))} /><datalist id="golf-clubs">{clubs.map((club) => <option value={club} key={club} />)}</datalist></label><label><span>Distanz (Meter)</span><input type="number" min={0} value={block.details.distanceMeters ?? ''} placeholder="z. B. 238" onChange={(event) => setProject(updateBlockDetails(project, block.id, { distanceMeters: nullableNumber(event.target.value) }))} /></label><label><span>Ergebnis / Lage</span><select value={block.details.result} onChange={(event) => setProject(updateBlockDetails(project, block.id, { result: event.target.value }))}><option value="">Nicht angegeben</option>{['Fairway', 'Rough', 'Grün', 'Bunker', 'Penalty', 'Eingelocht'].map((result) => <option value={result} key={result}>{result}</option>)}</select></label><label className="wide"><span>Notiz</span><textarea value={block.details.notes} placeholder="Optionaler Kommentar zum Schlag" onChange={(event) => setProject(updateBlockDetails(project, block.id, { notes: event.target.value }))} /></label></div><footer><div className="detail-preview"><span>OVERLAY-VORSCHAU</span><b>{player?.name} · Schlag {shotNumber ?? '–'} / Par {par}</b><small>{[block.details.club, block.details.distanceMeters ? `${block.details.distanceMeters} m` : '', block.details.result].filter(Boolean).join(' · ') || 'Noch keine Schlagdetails'}</small></div><button className="primary" onClick={onClose}><Check size={15} /> Fertig</button></footer></section></div>;
 }
 
 function OverlaySettings({ project, sequence, type, setProject }: { project: GolfProject; sequence: VirtualSequence; type: OverlayType; setProject: (project: GolfProject) => void }) {
@@ -975,8 +977,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         const block = project.blocks.find((item) => item.id === sequence.targetBlockId);
         if (!block) return [];
         const player = project.settings.players.find((item) => item.id === block.playerId);
-        const playback = sequencePlaybackSource(project, sequence, 0, previewRenderPlan);
-        return playback ? [{ sequence, block, player, ...playback }] : [];
+        return [{ sequence, block, player }];
     }), [project, sequenceIds, previewRenderPlan]);
     const [index, setIndex] = useState(0);
     const [playing, setPlaying] = useState(true);
@@ -998,6 +999,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
     const [detectionStatus, setDetectionStatus] = useState('');
     const [holeTitleIndex, setHoleTitleIndex] = useState<number>();
     const [previewMediaId, setPreviewMediaId] = useState<string>();
+    const [playbackError, setPlaybackError] = useState<string>();
     const currentItem = items[index];
     const currentPlayback = currentItem
         ? previewMediaId
@@ -1015,13 +1017,14 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
     const durations = items.map((item) => (item.sequence.outFrame - item.sequence.inFrame) / item.sequence.sourceFps);
     const totalDuration = durations.reduce((sum, duration) => sum + duration, 0);
     const elapsedBefore = durations.slice(0, index).reduce((sum, duration) => sum + duration, 0);
-    const position = Math.min(totalDuration, elapsedBefore + localFrame / (current?.sequence.sourceFps ?? 1));
+    const position = Math.min(totalDuration, elapsedBefore + localFrame / (currentItem?.sequence.sourceFps ?? 1));
     const currentTracer = current ? project.shotTracers.find((tracer) => tracer.sequenceId === current.sequence.id) : undefined;
     const activeTracer = currentTracer?.enabled
         && (!currentTracer.binding?.cutId || current?.cutId.startsWith('preview-') || currentTracer.binding.cutId === current?.cutId)
         && (!currentTracer.binding?.mediaId || currentTracer.binding.mediaId === current?.media.id)
         ? currentTracer : undefined;
-    useEffect(() => { setTracerEditing(false); setMarkingBall(false); setManualTracking(false); setTracerWorkflowStep(undefined); setCameraLockStep(undefined); setCameraLockDraft({ referencePoints: [], targetPoints: [] }); setCameraLockBasePoints([]); setLandingMode(false); setLandingOcclusion(false); setTrackingCursor(undefined); setBallCandidates([]); setDetectionStatus(''); setPreviewMediaId(undefined); }, [current?.sequence.id]);
+    useEffect(() => { setTracerEditing(false); setMarkingBall(false); setManualTracking(false); setTracerWorkflowStep(undefined); setCameraLockStep(undefined); setCameraLockDraft({ referencePoints: [], targetPoints: [] }); setCameraLockBasePoints([]); setLandingMode(false); setLandingOcclusion(false); setTrackingCursor(undefined); setBallCandidates([]); setDetectionStatus(''); setPreviewMediaId(undefined); }, [currentItem?.sequence.id]);
+    useEffect(() => setPlaybackError(undefined), [current?.sequence.id, current?.cutId, current?.media.id]);
     useEffect(() => () => { if (transitionTimerRef.current !== undefined) window.clearTimeout(transitionTimerRef.current); }, []);
     useEffect(() => {
         const element = mediaElement();
@@ -1148,6 +1151,22 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
             if (handle !== undefined) video.cancelVideoFrameCallback?.(handle);
         };
     }, [current?.sequence.id, current?.cutId, current?.media.id, current?.range.outFrame, current?.range.sourceFps, playing]);
+    useEffect(() => {
+        if (!currentItem || currentPlayback || !playing) return;
+        const timer = window.setTimeout(() => {
+            const nextMoment = nextPlayableMomentSeconds(previewRenderPlan, currentItem.sequence.id, localFrame / currentItem.sequence.sourceFps);
+            if (nextMoment !== null) {
+                pendingOffset.current = nextMoment;
+                setLocalFrame(Math.round(nextMoment * currentItem.sequence.sourceFps));
+            } else advance();
+        }, 900);
+        return () => window.clearTimeout(timer);
+    }, [currentItem?.sequence.id, currentPlayback?.cutId, localFrame, playing, previewRenderPlan]);
+    useEffect(() => {
+        if (!playbackError) return;
+        const timer = window.setTimeout(advanceCutOrSequence, 900);
+        return () => window.clearTimeout(timer);
+    }, [playbackError, current?.cutId]);
     const togglePlay = () => {
         const element = mediaElement();
         if (!element) return;
@@ -1510,6 +1529,10 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
         setProject(setSequenceCameraFrom(project, current.sequence.id, previewMediaId, Math.round(localFrame / current.sequence.sourceFps * 1_000_000)));
         setPreviewMediaId(undefined);
     };
+    if (!current && currentItem) {
+        const diagnostic = previewRenderPlan.diagnostics.find((item) => item.sequenceId === currentItem.sequence.id && item.severity === 'error');
+        return <div className="preview-backdrop"><section className="rough-preview unavailable-preview"><header className="preview-header"><div><div className="eyebrow"><span /> ROHSCHNITT-VORSCHAU</div><h2>{onlyHole ? `Loch ${onlyHole}` : 'Komplette Runde'}</h2></div><div className="preview-now"><span>QUELLE FEHLT</span><b>Loch {currentItem.block.hole} · {currentItem.player?.name} · {currentItem.block.label}</b></div><button className="preview-close" onClick={onClose}><X size={18} /></button></header><div className="unavailable-preview-body"><FileVideo size={48} /><span>MOMENT {index + 1} VON {items.length}</span><h2>Dieser Bereich kann gerade nicht abgespielt werden.</h2><p>{diagnostic?.message ?? 'Die Videodatei oder der gewählte Kamera-Cut ist nicht verfügbar.'}</p><small>Die Filmvorschau überspringt den Bereich automatisch. Der Export bleibt blockiert, bis die Quelle repariert oder der Moment bewusst entfernt wurde.</small><div><button className="secondary" onClick={() => onEdit(currentItem.sequence.id)}><Scissors size={15} /> Moment reparieren</button><button className="primary" disabled={index === items.length - 1} onClick={advance}><SkipForward size={15} /> Jetzt überspringen</button></div></div></section></div>;
+    }
     if (!current) return <div className="preview-backdrop"><section className="rough-preview empty"><button className="preview-close" onClick={onClose}><X size={18} /></button><MonitorPlay size={44} /><h2>Noch kein Rohschnitt vorhanden</h2><p>Weise zuerst mindestens eine Sequenz einem Golfblock zu.</p></section></div>;
     const holeData = project.courseData.holes.find((hole) => hole.number === current.block.hole);
     const scoreText = current.player ? scoreBeforeHole(project, current.player.id, current.block.hole) : 'E';
@@ -1520,7 +1543,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
     return <div className="preview-backdrop"><section className="rough-preview">
         <header className="preview-header"><div><div className="eyebrow"><span /> ROHSCHNITT-VORSCHAU</div><h2>{onlyHole ? `Loch ${onlyHole}` : 'Komplette Runde'}</h2></div><div className="preview-now"><span>JETZT</span><b>Loch {current.block.hole} · {current.player?.name} · {current.block.label}</b></div><button className="preview-close" onClick={onClose}><X size={18} /></button></header>
         <div className="preview-body"><div className="preview-player"><div className="preview-stage">
-            {current.media.kind === 'video' ? <video muted key={`${current.sequence.id}:${current.cutId}`} ref={videoRef} src={fileUrl(current.media.path)} onLoadedMetadata={startCurrent} onTimeUpdate={(event) => {
+            {current.media.kind === 'video' ? <video muted key={`${current.sequence.id}:${current.cutId}`} ref={videoRef} src={fileUrl(current.media.path)} onLoadedMetadata={startCurrent} onError={() => setPlaybackError('Die Videodatei konnte nicht gelesen werden. Dieser Kamera-Cut wird übersprungen.')} onTimeUpdate={(event) => {
                 const relativeSeconds = current.momentStartSeconds + Math.max(0, event.currentTarget.currentTime - current.range.inFrame / current.range.sourceFps);
                 const relative = Math.round(relativeSeconds * current.sequence.sourceFps);
                 setLocalFrame(relative);
@@ -1531,6 +1554,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
                 setLocalFrame(Math.round(relativeSeconds * current.sequence.sourceFps));
                 if (event.currentTarget.currentTime >= current.range.outFrame / current.range.sourceFps) advanceCutOrSequence();
             }} onEnded={advanceCutOrSequence} /></div>}
+            {playbackError && <div className="preview-source-warning"><FileVideo size={31} /><div><b>Quelle nicht verfügbar</b><span>{playbackError}</span><small>Automatisch weiter in einem Moment …</small></div><button onClick={advanceCutOrSequence}><SkipForward size={14} /> Überspringen</button></div>}
             {currentAudio && <audio className="canonical-preview-audio" key={`${current.sequence.id}:${currentAudio.audioCutId}`} ref={audioRef} src={fileUrl(currentAudio.media.path)} onLoadedMetadata={startCurrentAudio} />}
             <ShotTracerLayer tracer={tracerWorkflowStep || cameraLockStep ? currentTracer : activeTracer} frame={localFrame} editing={tracerEditing} marking={markingBall} tracking={Boolean(tracerWorkflowStep || cameraLockStep)} candidates={[]} cameraMarkers={cameraMarkers} videoRef={videoRef} sequence={current.sequence} mediaRange={current.range} onMark={(x, y) => cameraLockStep ? handleCameraLockPoint(x, y) : handleTracerWorkflowPoint(x, y)} onCandidate={() => undefined} onCursor={setTrackingCursor} onPoint={(pointIndex, x, y) => {
                 if (!current || !activeTracer) return;
@@ -1538,7 +1562,7 @@ function RoughCutPreview({ project, setProject, onlyHole, onClose, onEdit }: { p
                 setProject(updateShotTracer(project, current.sequence.id, { points: activeTracer.points.map((point, index) => index === pointIndex ? { ...point, ...worldPoint } : point) }));
             }} />
             {(tracerWorkflowStep === 'impact-point' || tracerWorkflowStep === 'landing-point' || tracerWorkflowStep === 'intermediate-point' || cameraLockStep) && <TrackingMagnifier video={videoRef.current} cursor={trackingCursor} frame={localFrame} />}
-            <div className="golf-overlay-layer fixed-editorial-overlays"><div className="fixed-scorebug"><i /><div><b>{current.player?.name.toUpperCase()}</b><span>H{current.block.hole} · PAR {holeData?.par ?? '–'}{holeData?.lengthMeters ? ` · ${holeData.lengthMeters} M` : ''}</span></div><strong>{scoreText}</strong></div>{shotMeta && localFrame / current.sequence.sourceFps <= EDITORIAL_STYLE.shotInfoSeconds && <div className="fixed-shot-info"><span>SCHLAG {current.block.details.shotNumber ?? '–'}</span><b>{current.block.details.club || current.block.label}</b>{current.block.details.distanceMeters && <em>{current.block.details.distanceMeters} M</em>}</div>}</div>
+            <div className="golf-overlay-layer fixed-editorial-overlays"><div className="fixed-scorebug"><i /><div><b>{current.player?.name.toUpperCase()}</b><span>H{current.block.hole} · PAR {holeData?.par ?? '–'}{holeData?.lengthMeters ? ` · ${holeData.lengthMeters} M` : ''}</span></div><strong>{scoreText}</strong></div>{shotMeta && localFrame / current.sequence.sourceFps <= EDITORIAL_STYLE.shotInfoSeconds && <div className="fixed-shot-info"><span>SCHLAG {strokeNumberForBlock(project, current.block.id) ?? '–'} / PAR {holeData?.par ?? '–'}</span><b>{current.block.details.club || current.block.label}</b>{current.block.details.distanceMeters && <em>{current.block.details.distanceMeters} M</em>}</div>}</div>
             <div ref={editorialFadeRef} className={`editorial-transition ${holeTitleItem ? 'show-card' : ''}`}><div className="hole-title-card"><span>{project.settings.course.toUpperCase()}</span><b>HOLE {holeTitleItem?.block.hole}</b><em>PAR {titleHoleData?.par ?? '–'}{titleHoleData?.lengthMeters ? ` · ${titleHoleData.lengthMeters} M` : ''}</em></div></div>
         </div>{(current.sequence.multicamAngles?.length ?? 0) > 1 && <CameraPlanTimeline project={project} sequence={current.sequence} activeCutId={current.cutId} setProject={setProject} onSeek={seekLocalFrame} />}<div className="preview-transport"><button onClick={() => goTo(index - 1)} disabled={index === 0}><SkipBack size={18} /></button><button className="preview-play" onClick={togglePlay}>{playing ? <Pause size={19} /> : <Play size={19} />}</button><button onClick={() => goTo(index + 1)} disabled={index === items.length - 1}><SkipForward size={18} /></button><strong>{formatDuration(position)} / {formatDuration(totalDuration)}</strong><span>Sequenz {index + 1} von {items.length}</span></div>
         <input className="rough-progress" type="range" min={0} max={Math.max(1, Math.round(totalDuration * 1000))} value={Math.round(position * 1000)} onChange={(event) => seekGlobal(Number(event.target.value) / 1000)} /></div>
@@ -1601,10 +1625,11 @@ function RoundDesk({ project, setProject, onNavigate, onOpenSequence, onStartHol
                 {blocks.map((block, index) => {
                     const sequences = block.sequenceIds.map((id) => project.sequences.find((sequence) => sequence.id === id)).filter(Boolean) as VirtualSequence[];
                     const productionStatus = sequences.some((sequence) => sequenceProductionStatus(project, sequence) === 'blocked') ? 'blocked' : sequences.length && sequences.every((sequence) => sequenceProductionStatus(project, sequence) === 'ready') ? 'ready' : sequences.length ? 'needs-review' : 'empty';
+                    const shotNumber = strokeNumberForBlock(project, block.id);
                     return <article className={`story-moment ${sequences.length ? 'filled' : ''} ${productionStatus}`} key={block.id}>
                         <span className="story-moment-index">{String(index + 1).padStart(2, '0')}</span>
                         <div className="story-moment-line"><i /></div>
-                        <div><small>{project.settings.players.find((player) => player.id === block.playerId)?.name ?? 'Spieler'}</small><h3>{blockLabel(block.type)}</h3><p>{sequences.length ? `${sequences.length} ${sequences.length === 1 ? 'Aufnahme' : 'Aufnahmen'} · ${PRODUCTION_STATUS_COPY[productionStatus]}` : 'Noch ohne Aufnahme'}</p></div>
+                        <div><small>{project.settings.players.find((player) => player.id === block.playerId)?.name ?? 'Spieler'}{shotNumber ? ` · SCHLAG ${shotNumber} / PAR ${selected.par}` : ''}</small><h3>{block.label}</h3><p>{sequences.length ? `${sequences.length} ${sequences.length === 1 ? 'Aufnahme' : 'Aufnahmen'} · ${PRODUCTION_STATUS_COPY[productionStatus]}` : block.label === 'Nicht gefilmter Schlag' || block.type === 'penalty' ? 'Zählt ohne Videomaterial' : 'Noch ohne Aufnahme'}</p></div>
                         {sequences.length ? <button onClick={() => onOpenSequence(sequences.find((sequence) => sequenceProductionStatus(project, sequence) !== 'ready')?.id ?? sequences[0].id)} aria-label={`${blockLabel(block.type)} im Editor öffnen`}><ChevronRight size={16} /></button> : <span className="story-planned">GEPLANT</span>}
                     </article>;
                 })}
@@ -1637,6 +1662,7 @@ function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfPr
     const [scorecardOpen, setScorecardOpen] = useState(false);
     const [editingBlockId, setEditingBlockId] = useState<string>();
     const holeBlocks = project.blocks.filter((block) => block.hole === hole);
+    const holePar = project.courseData.holes.find((item) => item.number === hole)?.par ?? 4;
     const blocksByPlayer = new Map(project.settings.players.map((player) => [player.id, holeBlocks
         .filter((block) => block.playerId === player.id)
         .sort((left, right) => left.order - right.order)]));
@@ -1675,12 +1701,15 @@ function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfPr
         <div className="player-lanes">{project.settings.players.map((player) => {
             const blocks = blocksByPlayer.get(player.id) ?? [];
             const sequenceCount = blocks.reduce((sum, block) => sum + block.sequenceIds.length, 0);
+            const strokeCount = playerHoleStrokeCount(project, hole, player.id);
             const addType = newTypes[player.id] ?? 'extra-shot';
-            return <section className="player-lane" key={player.id}><header><div className="player-avatar">{player.name.slice(0, 1).toUpperCase()}</div><div><h2>{player.name}</h2><span>{sequenceCount} Sequenzen · {blocks.length} Blöcke</span></div></header><div className="block-flow">{blocks.map((block, blockIndex) => {
+            return <section className="player-lane" key={player.id}><header><div className="player-avatar">{player.name.slice(0, 1).toUpperCase()}</div><div><h2>{player.name}</h2><span>{strokeCount} Schläge / Par {holePar} · {sequenceCount} Sequenzen</span></div></header><div className="stroke-quick-actions"><span>Schlag fehlt im Material?</span><button onClick={() => setProject(addCountedStroke(project, hole, player.id, 'unfilmed'))}><Plus size={12} /> Nicht gefilmt</button><button className="penalty" onClick={() => setProject(addCountedStroke(project, hole, player.id, 'penalty'))}><Flag size={12} /> Strafschlag</button></div><div className="block-flow">{blocks.map((block, blockIndex) => {
                 const sequences = block.sequenceIds.map((id) => project.sequences.find((sequence) => sequence.id === id)).filter(Boolean) as VirtualSequence[];
                 const duration = sequences.reduce((sum, sequence) => sum + (sequence.outFrame - sequence.inFrame) / sequence.sourceFps, 0);
-                return <article className={`golf-block ${sequences.length ? 'filled' : 'empty'}`} key={block.id}><div className="block-head"><span className="block-order">{String(blockIndex + 1).padStart(2, '0')}</span><div><h3>{block.label}</h3><small>{sequences.length ? `${sequences.length} Sequenz${sequences.length === 1 ? '' : 'en'} · ${formatDuration(duration)}` : 'Noch nicht belegt'}{block.details.club ? ` · ${block.details.club}` : ''}{block.details.distanceMeters ? ` · ${block.details.distanceMeters} m` : ''}</small></div><div className="block-actions"><button title="Schlagdetails bearbeiten" onClick={() => setEditingBlockId(block.id)}><Pencil size={14} /></button><button disabled={blockIndex === 0} title="Block nach oben" onClick={() => setProject(moveBlock(project, block.id, -1))}><ArrowUp size={14} /></button><button disabled={blockIndex === blocks.length - 1} title="Block nach unten" onClick={() => setProject(moveBlock(project, block.id, 1))}><ArrowDown size={14} /></button><button title="Block duplizieren" onClick={() => setProject(duplicateBlock(project, block.id))}><Copy size={14} /></button><button title="Block löschen" onClick={() => removeBlock(block.id, sequences.length)}><Trash2 size={14} /></button></div></div>
-                    {sequences.length ? <div className="block-sequences">{sequences.map((sequence, index) => <div className="builder-sequence" key={sequence.id}><button className="builder-sequence-main" onClick={() => onOpenSequence(sequence.id)}><span><Play size={11} /></span><div><b>{sourceName(sequence)}</b><small>{frameTime(sequence.inFrame, sequence.sourceFps)} – {frameTime(sequence.outFrame, sequence.sourceFps)}</small></div></button><div className="sequence-order-actions"><button disabled={index === 0} title="Sequenz nach oben" onClick={() => setProject(moveSequence(project, block.id, sequence.id, -1))}><ArrowUp size={12} /></button><button disabled={index === sequences.length - 1} title="Sequenz nach unten" onClick={() => setProject(moveSequence(project, block.id, sequence.id, 1))}><ArrowDown size={12} /></button></div></div>)}</div> : <div className="block-placeholder"><Scissors size={16} /><span>Im Sichtungseditor zuweisen</span></div>}
+                const shotNumber = strokeNumberForBlock(project, block.id);
+                const countsWithoutVideo = !sequences.length && (block.label === 'Nicht gefilmter Schlag' || block.type === 'penalty');
+                return <article className={`golf-block ${sequences.length ? 'filled' : 'empty'} ${countsWithoutVideo ? 'count-only' : ''}`} key={block.id}><div className="block-head"><span className="block-order">{shotNumber ? `S${shotNumber}` : String(blockIndex + 1).padStart(2, '0')}</span><div>{shotNumber && <span className="stroke-context">SCHLAG {shotNumber} / PAR {holePar}</span>}<h3>{block.label}</h3><small>{sequences.length ? `${sequences.length} Sequenz${sequences.length === 1 ? '' : 'en'} · ${formatDuration(duration)}` : countsWithoutVideo ? 'Zählt im Schlagverlauf · kein Video nötig' : 'Noch nicht belegt'}{block.details.club ? ` · ${block.details.club}` : ''}{block.details.distanceMeters ? ` · ${block.details.distanceMeters} m` : ''}</small></div><div className="block-actions"><button title="Schlagdetails und Schlagnummer bearbeiten" onClick={() => setEditingBlockId(block.id)}><Pencil size={14} /></button><button disabled={blockIndex === 0} title="Block nach oben" onClick={() => setProject(moveBlock(project, block.id, -1))}><ArrowUp size={14} /></button><button disabled={blockIndex === blocks.length - 1} title="Block nach unten" onClick={() => setProject(moveBlock(project, block.id, 1))}><ArrowDown size={14} /></button><button title="Block duplizieren" onClick={() => setProject(duplicateBlock(project, block.id))}><Copy size={14} /></button><button title="Block löschen" onClick={() => removeBlock(block.id, sequences.length)}><Trash2 size={14} /></button></div></div>
+                    {sequences.length ? <div className="block-sequences">{sequences.map((sequence, index) => <div className="builder-sequence" key={sequence.id}><button className="builder-sequence-main" onClick={() => onOpenSequence(sequence.id)}><span><Play size={11} /></span><div><b>{sourceName(sequence)}</b><small>{frameTime(sequence.inFrame, sequence.sourceFps)} – {frameTime(sequence.outFrame, sequence.sourceFps)}</small></div></button><div className="sequence-order-actions"><button disabled={index === 0} title="Sequenz nach oben" onClick={() => setProject(moveSequence(project, block.id, sequence.id, -1))}><ArrowUp size={12} /></button><button disabled={index === sequences.length - 1} title="Sequenz nach unten" onClick={() => setProject(moveSequence(project, block.id, sequence.id, 1))}><ArrowDown size={12} /></button></div></div>)}</div> : countsWithoutVideo ? <div className="block-placeholder counted"><Check size={16} /><span>Bewusst ohne Aufnahme · wird nicht abgespielt</span></div> : <div className="block-placeholder"><Scissors size={16} /><span>Im Sichtungseditor zuweisen</span></div>}
                 </article>;
             })}</div><footer className="add-block"><select value={addType} onChange={(event) => setNewTypes((current) => ({ ...current, [player.id]: event.target.value as BlockType }))}>{BLOCK_TYPES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><button onClick={() => setProject(addBlock(project, hole, player.id, addType))}><Plus size={15} /> Block hinzufügen</button></footer></section>;
         })}</div>

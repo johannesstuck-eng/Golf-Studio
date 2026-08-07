@@ -1,4 +1,7 @@
 const MICROSECONDS_PER_SECOND = 1_000_000;
+// FFprobe container durations and decimal frame rates (for example 59.94) can
+// disagree by a few hundred microseconds at the final frame boundary.
+const MEDIA_DURATION_ROUNDING_TOLERANCE_US = 1_000;
 
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
 const integerUs = (value) => finite(value) ? Math.round(value) : null;
@@ -163,7 +166,7 @@ function resolveSourceRange(project, sequence, cut, durationUs, diagnostics, pur
             diagnostics.push(diagnostic('error', 'AUDIO_SOURCE_RANGE_INVALID', 'Der lokale Tonbereich ist ungültig oder stimmt nicht mit der Cut-Dauer überein.', context));
             return null;
         }
-        if (finite(media.durationSeconds) && adjustedEndUs > Math.round(media.durationSeconds * MICROSECONDS_PER_SECOND)) {
+        if (finite(media.durationSeconds) && adjustedEndUs > Math.round(media.durationSeconds * MICROSECONDS_PER_SECOND) + MEDIA_DURATION_ROUNDING_TOLERANCE_US) {
             diagnostics.push(diagnostic('error', offsetUs ? 'AUDIO_OFFSET_OUT_OF_BOUNDS' : 'SOURCE_RANGE_OUTSIDE_MEDIA', 'Audio-Offset und Momentdauer reichen über die verfügbare Tonquelle hinaus.', context));
             return null;
         }
@@ -196,7 +199,7 @@ function resolveSourceRange(project, sequence, cut, durationUs, diagnostics, pur
         diagnostics.push(diagnostic('error', purpose === 'audio' && offsetUs ? 'AUDIO_OFFSET_OUT_OF_BOUNDS' : 'SOURCE_RANGE_OUTSIDE_MEDIA', 'Der lokale Quellbereich liegt außerhalb der Mediendatei.', context));
         return null;
     }
-    if (finite(resolved.media.durationSeconds) && sourceEndUs > Math.round(resolved.media.durationSeconds * MICROSECONDS_PER_SECOND)) {
+    if (finite(resolved.media.durationSeconds) && sourceEndUs > Math.round(resolved.media.durationSeconds * MICROSECONDS_PER_SECOND) + MEDIA_DURATION_ROUNDING_TOLERANCE_US) {
         diagnostics.push(diagnostic('error', purpose === 'audio' && offsetUs ? 'AUDIO_OFFSET_OUT_OF_BOUNDS' : 'SOURCE_RANGE_OUTSIDE_MEDIA', 'Der lokale Quellbereich reicht über das Ende der Mediendatei hinaus.', context));
         return null;
     }
