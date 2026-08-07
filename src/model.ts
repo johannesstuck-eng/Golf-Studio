@@ -130,7 +130,7 @@ export function createDefaultBlocks(settings: ProjectSettings): GolfBlock[] {
 
 export function createProject(settings: ProjectSettings): GolfProject {
     return {
-        schemaVersion: 10,
+        schemaVersion: 11,
         settings,
         media: [],
         suggestions: [],
@@ -238,9 +238,12 @@ export function normalizeProject(input: unknown): GolfProject {
         };
     }) : [];
     return {
-        schemaVersion: 10,
+        schemaVersion: 11,
         settings,
-        media: Array.isArray(raw.media) ? raw.media : [],
+        media: Array.isArray(raw.media) ? raw.media.map((media) => ({
+            ...media,
+            assignedHole: Number.isInteger(media.assignedHole) && media.assignedHole! >= 1 && media.assignedHole! <= settings.holes ? media.assignedHole : null,
+        })) : [],
         suggestions: Array.isArray(raw.suggestions) ? raw.suggestions : [],
         groups: Array.isArray(raw.groups) ? raw.groups.map((group) => ({
             ...group,
@@ -334,12 +337,23 @@ export function upsertSequence(project: GolfProject, draft: SequenceDraft): Golf
     };
     return {
         ...project,
-        schemaVersion: 10,
+        schemaVersion: 11,
         blocks,
         sequences: oldSequence
             ? project.sequences.map((item) => item.id === sequenceId ? sequence : item)
             : [...project.sequences, sequence],
         modifiedAt: now,
+    };
+}
+
+export function setMediaAssignedHole(project: GolfProject, mediaId: string, hole: number | null): GolfProject {
+    if (!project.media.some((media) => media.id === mediaId)) return project;
+    const assignedHole = hole !== null && Number.isInteger(hole) && hole >= 1 && hole <= project.settings.holes ? hole : null;
+    return {
+        ...project,
+        schemaVersion: 11,
+        media: project.media.map((media) => media.id === mediaId ? { ...media, assignedHole } : media),
+        modifiedAt: new Date().toISOString(),
     };
 }
 
@@ -415,7 +429,7 @@ export function setSequenceCameraRange(project: GolfProject, sequenceId: string,
     const now = new Date().toISOString();
     return {
         ...project,
-        schemaVersion: 10,
+        schemaVersion: 11,
         sequences: project.sequences.map((item) => item.id === sequenceId ? { ...item, activeMediaId: mediaId, videoCuts: cuts, review: { status: 'unreviewed', reviewedFingerprint: null }, updatedAt: now } : item),
         shotTracers,
         modifiedAt: now,
@@ -601,7 +615,7 @@ export function hasHoleBlockOrderOverride(project: GolfProject, hole: number): b
 export function clearHoleBlockOrderOverride(project: GolfProject, hole: number): GolfProject {
     return {
         ...project,
-        schemaVersion: 10,
+        schemaVersion: 11,
         holeBlockOrders: (project.holeBlockOrders ?? []).filter((order) => order.hole !== hole),
         modifiedAt: new Date().toISOString(),
     };
@@ -612,7 +626,7 @@ function storeHoleBlockOrder(project: GolfProject, hole: number, blockIds: strin
     const exists = current.some((order) => order.hole === hole);
     return {
         ...project,
-        schemaVersion: 10,
+        schemaVersion: 11,
         holeBlockOrders: exists
             ? current.map((order) => order.hole === hole ? { hole, blockIds } : order)
             : [...current, { hole, blockIds }],
@@ -664,7 +678,7 @@ export function toggleSequenceOverlay(project: GolfProject, sequenceId: string, 
             endFrame: sequence.outFrame - sequence.inFrame,
             position: type === 'hole-info' ? 'top-right' as const : type === 'score-card' ? 'top-left' as const : 'bottom-left' as const,
         }];
-    return { ...project, schemaVersion: 10, overlays, modifiedAt: new Date().toISOString() };
+    return { ...project, schemaVersion: 11, overlays, modifiedAt: new Date().toISOString() };
 }
 
 function defaultShotTracer(sequence: GolfProject['sequences'][number]): ShotTracerEffect {
@@ -692,7 +706,7 @@ export function toggleShotTracer(project: GolfProject, sequenceId: string): Golf
     const shotTracers = existing
         ? project.shotTracers.map((tracer) => tracer.id === existing.id ? { ...tracer, enabled: !tracer.enabled } : tracer)
         : [...project.shotTracers, defaultShotTracer(sequence)];
-    return { ...project, schemaVersion: 10, shotTracers, modifiedAt: new Date().toISOString() };
+    return { ...project, schemaVersion: 11, shotTracers, modifiedAt: new Date().toISOString() };
 }
 
 export function updateShotTracer(project: GolfProject, sequenceId: string, patch: Partial<Omit<ShotTracerEffect, 'id' | 'sequenceId'>>): GolfProject {
@@ -720,7 +734,7 @@ export function updateShotTracer(project: GolfProject, sequenceId: string, patch
     };
     return {
         ...project,
-        schemaVersion: 10,
+        schemaVersion: 11,
         shotTracers: project.shotTracers.map((item) => item.id === tracer.id ? updated : item),
         modifiedAt: new Date().toISOString(),
     };
@@ -918,7 +932,7 @@ export function hasPlayerOrderOverride(project: GolfProject, hole: number, block
 export function clearPlayerOrderOverride(project: GolfProject, hole: number, blockOrder: number): GolfProject {
     return {
         ...project,
-        schemaVersion: 10,
+        schemaVersion: 11,
         playerOrders: project.playerOrders.filter((order) => order.hole !== hole || order.blockOrder !== blockOrder),
         holeBlockOrders: (project.holeBlockOrders ?? []).filter((order) => order.hole !== hole),
         modifiedAt: new Date().toISOString(),
@@ -937,7 +951,7 @@ export function movePlayerInOrder(project: GolfProject, hole: number, blockOrder
         : [...project.playerOrders, { hole, blockOrder, playerIds }];
     return {
         ...project,
-        schemaVersion: 10,
+        schemaVersion: 11,
         playerOrders,
         holeBlockOrders: (project.holeBlockOrders ?? []).filter((order) => order.hole !== hole),
         modifiedAt: new Date().toISOString(),
@@ -1003,7 +1017,7 @@ export function setMulticamSyncOffsets(project: GolfProject, groupId: string, of
         syncStatus,
         syncOffsetsSeconds: { ...(item.syncOffsetsSeconds ?? {}), ...validOffsets },
     } : item);
-    const next = { ...project, schemaVersion: 10, groups, modifiedAt: now };
+    const next = { ...project, schemaVersion: 11, groups, modifiedAt: now };
     return {
         ...next,
         sequences: next.sequences.map((sequence) => sequence.sourceType === 'group' && sequence.sourceId === groupId ? {
@@ -1031,6 +1045,20 @@ function multicamSourceKey(media: MediaItem): string {
     return `${media.deviceKey}:${filenameCameraFamily(media.name)}`;
 }
 
+function djiClipCounter(name: string): number | null {
+    const match = name.replace(/\.[^.]+$/, '').match(/^dji[_-]\d{14,}[_-](\d+)/i);
+    return match ? Number(match[1]) : null;
+}
+
+function representsDistinctCameraStreams(left: MediaItem, right: MediaItem): boolean {
+    if (multicamSourceKey(left) !== multicamSourceKey(right)) return true;
+    const leftCounter = djiClipCounter(left.name);
+    const rightCounter = djiClipCounter(right.name);
+    return leftCounter !== null && rightCounter !== null
+        && Math.abs(leftCounter - rightCounter) > 1
+        && overlapMilliseconds(left, right) >= 2000;
+}
+
 export function overlapMilliseconds(left: MediaItem, right: MediaItem): number {
     const overlap = Math.min(end(left), end(right)) - Math.max(start(left), start(right));
     return Number.isFinite(overlap) ? Math.max(0, overlap) : 0;
@@ -1050,12 +1078,12 @@ export function suggestMulticam(media: MediaItem[]): MulticamSuggestion[] {
         cluster ? cluster.push(item) : clusters.push([item]);
     }
     return clusters
-        .filter((cluster) => cluster.length > 1 && new Set(cluster.map(multicamSourceKey)).size > 1)
+        .filter((cluster) => cluster.some((item, itemIndex) => cluster.slice(itemIndex + 1).some((other) => representsDistinctCameraStreams(item, other))))
         .map((cluster, index) => {
             const starts = cluster.map(start);
             const ends = cluster.map(end);
             const overlapRatios = cluster.flatMap((item, itemIndex) => cluster.slice(itemIndex + 1)
-                .filter((other) => multicamSourceKey(item) !== multicamSourceKey(other))
+                .filter((other) => representsDistinctCameraStreams(item, other))
                 .map((other) => {
                     const shorter = Math.min(item.durationSeconds, other.durationSeconds) * 1000;
                     return shorter > 0 ? overlapMilliseconds(item, other) / shorter : 0;
