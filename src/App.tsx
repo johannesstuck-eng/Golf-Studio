@@ -500,15 +500,20 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId, 
     }, [sourceId, sourceType]);
     useEffect(() => {
         const key = (event: KeyboardEvent) => {
-            if ((event.target as HTMLElement)?.matches('input, select, textarea')) return;
-            if (event.key === 'ArrowLeft') { event.preventDefault(); seek(currentFrame - 1); }
-            if (event.key === 'ArrowRight') { event.preventDefault(); seek(currentFrame + 1); }
+            const target = event.target instanceof HTMLElement ? event.target : null;
+            if (target?.closest('input, select, textarea, [contenteditable="true"]') || event.ctrlKey || event.metaKey || event.altKey) return;
+            const handled = ['ArrowLeft', 'ArrowRight', ' ', 'i', 'I', 'o', 'O'].includes(event.key);
+            if (!handled) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.key === 'ArrowLeft') seek(currentFrame - 1);
+            if (event.key === 'ArrowRight') seek(currentFrame + 1);
             if (event.key.toLowerCase() === 'i') setInFrame(currentFrame);
             if (event.key.toLowerCase() === 'o') setOutFrame(Math.max(inFrame + 1, currentFrame));
-            if (event.key === ' ') { event.preventDefault(); const element = player(); if (element) element.paused ? void element.play() : element.pause(); }
+            if (event.key === ' ') { const element = player(); if (element) element.paused ? void element.play() : element.pause(); }
         };
-        window.addEventListener('keydown', key);
-        return () => window.removeEventListener('keydown', key);
+        document.addEventListener('keydown', key, true);
+        return () => document.removeEventListener('keydown', key, true);
     }, [currentFrame, inFrame, seek]);
     const togglePlay = () => { const element = player(); if (element) element.paused ? void element.play() : element.pause(); };
     const playRange = () => { seek(inFrame); setPlaySelection(true); window.setTimeout(() => void player()?.play(), 0); };
