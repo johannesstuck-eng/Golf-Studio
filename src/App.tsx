@@ -398,7 +398,7 @@ function ImportScreen({ project, setProject, onReview }: ImportProps) {
     </section>;
 }
 
-interface ReviewProps { project: GolfProject; setProject: (project: GolfProject) => void; initialMediaId?: string; initialSequenceId?: string; initialHole?: number }
+interface ReviewProps { project: GolfProject; setProject: (project: GolfProject) => void; initialMediaId?: string; initialSequenceId?: string; initialHole?: number; initialBlockId?: string }
 type ReviewHoleFilter = 'all' | 'unassigned' | number;
 
 function WaveformRow({ label, values, localSeconds, durationSeconds, reference = false }: { label: string; values: number[]; localSeconds: number; durationSeconds: number; reference?: boolean }) {
@@ -409,9 +409,9 @@ function WaveformRow({ label, values, localSeconds, durationSeconds, reference =
     return <div className={`waveform-row ${reference ? 'reference' : ''}`}><div><b>{label}</b><small>{reference ? 'REFERENZ' : `${localSeconds.toFixed(2)} s`}</small></div><div className="waveform-window"><span className="waveform-playhead" />{windowValues.map((value, index) => <i style={{ height: `${Math.max(3, value * 100)}%` }} key={index} />)}</div></div>;
 }
 
-function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId, initialHole }: ReviewProps) {
+function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId, initialHole, initialBlockId }: ReviewProps) {
     const requestedSequence = project.sequences.find((sequence) => sequence.id === initialSequenceId);
-    const requestedBlock = project.blocks.find((block) => block.id === requestedSequence?.targetBlockId);
+    const requestedBlock = project.blocks.find((block) => block.id === (requestedSequence?.targetBlockId ?? initialBlockId));
     const requestedMedia = project.media.find((media) => media.id === (requestedSequence?.sourceType === 'media' ? requestedSequence.sourceId : initialMediaId));
     const videoRef = useRef<HTMLVideoElement>(null);
     const audioRef = useRef<HTMLAudioElement>(null);
@@ -428,7 +428,7 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId, 
     const [playing, setPlaying] = useState(false);
     const [playSelection, setPlaySelection] = useState(false);
     const [hole, setHole] = useState(requestedBlock?.hole ?? initialHole ?? requestedMedia?.assignedHole ?? 1);
-    const [holeFilter, setHoleFilter] = useState<ReviewHoleFilter>(initialHole ?? 'all');
+    const [holeFilter, setHoleFilter] = useState<ReviewHoleFilter>(initialHole ?? (requestedBlock && requestedMedia?.assignedHole === requestedBlock.hole ? requestedBlock.hole : 'all'));
     const [multicamPicking, setMulticamPicking] = useState(false);
     const [multicamSelection, setMulticamSelection] = useState<string[]>([]);
     const [playerId, setPlayerId] = useState(requestedBlock?.playerId ?? project.settings.players[0]?.id ?? '');
@@ -515,8 +515,8 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId, 
         resetMarks();
     }, [sourceId, sourceType, resetMarks]);
     useEffect(() => {
-        if (!editingId && sourceAssignedHole) { setHole(sourceAssignedHole); setTargetBlockId(''); }
-    }, [sourceAssignedHole, sourceId, sourceType]);
+        if (!editingId && !initialBlockId && sourceAssignedHole) { setHole(sourceAssignedHole); setTargetBlockId(''); }
+    }, [editingId, initialBlockId, sourceAssignedHole, sourceId, sourceType]);
     useEffect(() => {
         if (sourceType === 'group' && !groupMedia.some((media) => media.id === activeMediaId)) setActiveMediaId(groupMedia[0]?.id ?? '');
     }, [activeMediaId, groupMedia, sourceType]);
@@ -1776,7 +1776,31 @@ function RoundDesk({ project, setProject, onNavigate, onOpenSequence, onStartHol
     </section>;
 }
 
-function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfProject; setProject: (project: GolfProject) => void; onOpenSequence: (sequenceId: string) => void }) {
+function BuilderClipBrowser({ project, block, onChoose, onClose }: { project: GolfProject; block: GolfBlock; onChoose: (mediaId: string) => void; onClose: () => void }) {
+    const [scope, setScope] = useState<'hole' | 'unassigned' | 'all'>(() => project.media.some((media) => media.kind === 'video' && media.assignedHole === block.hole) ? 'hole' : 'all');
+    const clips = useMemo(() => project.media
+        .filter((media) => media.kind === 'video' && (scope === 'all' || scope === 'hole' ? scope === 'all' || media.assignedHole === block.hole : !media.assignedHole))
+        .sort((left, right) => {
+            if (scope === 'all') {
+                const leftPriority = left.assignedHole === block.hole ? 0 : left.assignedHole ? 2 : 1;
+                const rightPriority = right.assignedHole === block.hole ? 0 : right.assignedHole ? 2 : 1;
+                if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+            }
+            return left.recordedAt.localeCompare(right.recordedAt);
+        }), [block.hole, project.media, scope]);
+    const [selectedId, setSelectedId] = useState(clips[0]?.id ?? '');
+    useEffect(() => { if (!clips.some((media) => media.id === selectedId)) setSelectedId(clips[0]?.id ?? ''); }, [clips, selectedId]);
+    const selected = project.media.find((media) => media.id === selectedId);
+    const player = project.settings.players.find((item) => item.id === block.playerId);
+    const sequenceUses = (mediaId: string) => project.sequences.filter((sequence) => sequence.sourceType === 'media' && sequence.sourceId === mediaId).length;
+    return <div className="data-editor-backdrop"><section className="builder-clip-browser"><header><div><div className="eyebrow"><span /> CLIP-BROWSER</div><h2>Clip für {player?.name ?? 'Spieler'} · {block.label}</h2><p>Loch {block.hole} · Vorschau prüfen und anschließend im Sichtungseditor exakt schneiden.</p></div><button className="preview-close" onClick={onClose}><X size={18} /></button></header>
+        <nav><button className={scope === 'hole' ? 'active' : ''} onClick={() => setScope('hole')}>Loch {block.hole}</button><button className={scope === 'unassigned' ? 'active' : ''} onClick={() => setScope('unassigned')}>Nicht zugeordnet</button><button className={scope === 'all' ? 'active' : ''} onClick={() => setScope('all')}>Alle Clips</button><span>{clips.length} Clips</span></nav>
+        <div className="builder-clip-browser-body"><aside>{clips.map((media) => <button className={selectedId === media.id ? 'active' : ''} onClick={() => setSelectedId(media.id)} key={media.id}><MediaIcon media={media} /><span><b>{media.name}</b><small>{media.assignedHole ? `LOCH ${media.assignedHole} · ` : ''}{formatDuration(media.durationSeconds)} · {media.fps ?? '?'} fps</small></span>{sequenceUses(media.id) > 0 && <em>{sequenceUses(media.id)}× verwendet</em>}</button>)}{!clips.length && <div className="builder-clip-empty"><FileVideo size={30} /><b>Keine Clips in diesem Filter</b><span>Wähle „Alle Clips“ oder importiere weiteres Material.</span></div>}</aside>
+            <main>{selected ? <><video key={selected.id} controls preload="metadata" src={fileUrl(selected.path)} /><div><span>VORSCHAU</span><b>{selected.name}</b><small>{selected.device} · {selected.width}×{selected.height} · {formatDuration(selected.durationSeconds)}</small></div></> : <div className="builder-clip-empty"><MonitorPlay size={42} /><b>Clip auswählen</b></div>}</main></div>
+        <footer><p>Der vollständige Clip wird nicht blind übernommen. Im nächsten Schritt setzt du In und Out.</p><button className="secondary" onClick={onClose}>Abbrechen</button><button className="primary" disabled={!selected} onClick={() => selected && onChoose(selected.id)}><Scissors size={15} /> Clip schneiden & hinzufügen</button></footer></section></div>;
+}
+
+function RoundBuilder({ project, setProject, onOpenSequence, onAddClip }: { project: GolfProject; setProject: (project: GolfProject) => void; onOpenSequence: (sequenceId: string) => void; onAddClip: (mediaId: string, blockId: string) => void }) {
     const [hole, setHole] = useState(1);
     const [builderView, setBuilderView] = useState<'players' | 'order'>('players');
     const [draggedBlockId, setDraggedBlockId] = useState<string>();
@@ -1785,6 +1809,7 @@ function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfPr
     const [previewScope, setPreviewScope] = useState<'round' | number>();
     const [scorecardOpen, setScorecardOpen] = useState(false);
     const [editingBlockId, setEditingBlockId] = useState<string>();
+    const [clipBrowserBlockId, setClipBrowserBlockId] = useState<string>();
     const holeBlocks = project.blocks.filter((block) => block.hole === hole);
     const holePar = project.courseData.holes.find((item) => item.number === hole)?.par ?? 4;
     const blocksByPlayer = new Map(project.settings.players.map((player) => [player.id, holeBlocks
@@ -1823,7 +1848,7 @@ function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfPr
             return <article draggable className={`true-order-card ${draggedBlockId === block.id ? 'dragging' : ''} ${dragOverBlockId === block.id ? 'drag-over' : ''} ${sequences.length ? 'filled' : countsWithoutVideo ? 'count-only' : 'empty'}`} key={block.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', block.id); setDraggedBlockId(block.id); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDragOverBlockId(block.id); }} onDragLeave={() => setDragOverBlockId((current) => current === block.id ? undefined : current)} onDrop={(event) => { event.preventDefault(); if (draggedBlockId) setProject(moveBlockInHoleOrder(project, hole, draggedBlockId, block.id)); setDraggedBlockId(undefined); setDragOverBlockId(undefined); }} onDragEnd={() => { setDraggedBlockId(undefined); setDragOverBlockId(undefined); }}>
                 <div className="true-order-card-top"><span className="true-order-position">{String(index + 1).padStart(2, '0')}</span><div className="true-order-player"><i>{player?.name.slice(0, 1).toUpperCase() ?? '?'}</i><span><b>{player?.name ?? 'Spieler'}</b><small>{shotNumber ? `SCHLAG ${shotNumber} / PAR ${holePar}` : 'ZWISCHENSZENE'}</small></span></div><GripVertical className="drag-handle" size={17} /></div>
                 <div className="true-order-card-body"><span>{blockLabel(block.type)}</span><h3>{block.label}</h3><p>{sequences.length ? `${sequences.length} ${sequences.length === 1 ? 'Aufnahme' : 'Aufnahmen'} · ${formatDuration(duration)}` : countsWithoutVideo ? 'Zählt ohne Videomaterial' : 'Noch ohne Aufnahme'}</p>{block.details.club && <small>{block.details.club}{block.details.distanceMeters ? ` · ${block.details.distanceMeters} m` : ''}</small>}</div>
-                <footer><button disabled={index === 0} title="Früher abspielen" onClick={() => setProject(moveBlockInHoleOrderBy(project, hole, block.id, -1))}><ArrowLeft size={13} /></button><button disabled={index === orderedBlocks.length - 1} title="Später abspielen" onClick={() => setProject(moveBlockInHoleOrderBy(project, hole, block.id, 1))}><ArrowRight size={13} /></button><span>{sequences.length ? 'IM FILM' : countsWithoutVideo ? 'ZÄHLT' : 'GEPLANT'}</span><button title="Schlagdetails bearbeiten" onClick={() => setEditingBlockId(block.id)}><Pencil size={13} /></button>{sequences[0] && <button title="Aufnahme öffnen" onClick={() => onOpenSequence(sequences[0].id)}><Play size={13} /></button>}</footer>
+                <footer><button disabled={index === 0} title="Früher abspielen" onClick={() => setProject(moveBlockInHoleOrderBy(project, hole, block.id, -1))}><ArrowLeft size={13} /></button><button disabled={index === orderedBlocks.length - 1} title="Später abspielen" onClick={() => setProject(moveBlockInHoleOrderBy(project, hole, block.id, 1))}><ArrowRight size={13} /></button><span>{sequences.length ? 'IM FILM' : countsWithoutVideo ? 'ZÄHLT' : 'GEPLANT'}</span><button className="add-clip-action" title="Clip hinzufügen" onClick={() => setClipBrowserBlockId(block.id)}><Plus size={13} /></button><button title="Schlagdetails bearbeiten" onClick={() => setEditingBlockId(block.id)}><Pencil size={13} /></button>{sequences[0] && <button title="Aufnahme öffnen" onClick={() => onOpenSequence(sequences[0].id)}><Play size={13} /></button>}</footer>
             </article>;
         })}</div><div className="true-order-hint"><GripVertical size={14} /><span><b>Drag & Drop:</b> Jede Karte ist ein Filmmoment. Die Position gilt unmittelbar für Lochvorschau, Rundenvorschau und Export.</span></div></section>}
         {builderView === 'players' && <>
@@ -1849,7 +1874,7 @@ function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfPr
                 const duration = sequences.reduce((sum, sequence) => sum + (sequence.outFrame - sequence.inFrame) / sequence.sourceFps, 0);
                 const shotNumber = strokeNumberForBlock(project, block.id);
                 const countsWithoutVideo = !sequences.length && (block.label === 'Nicht gefilmter Schlag' || block.type === 'penalty');
-                return <article className={`golf-block ${sequences.length ? 'filled' : 'empty'} ${countsWithoutVideo ? 'count-only' : ''}`} key={block.id}><div className="block-head"><span className="block-order">{shotNumber ? `S${shotNumber}` : String(blockIndex + 1).padStart(2, '0')}</span><div>{shotNumber && <span className="stroke-context">SCHLAG {shotNumber} / PAR {holePar}</span>}<h3>{block.label}</h3><small>{sequences.length ? `${sequences.length} Sequenz${sequences.length === 1 ? '' : 'en'} · ${formatDuration(duration)}` : countsWithoutVideo ? 'Zählt im Schlagverlauf · kein Video nötig' : 'Noch nicht belegt'}{block.details.club ? ` · ${block.details.club}` : ''}{block.details.distanceMeters ? ` · ${block.details.distanceMeters} m` : ''}</small></div><div className="block-actions"><button title="Schlagdetails und Schlagnummer bearbeiten" onClick={() => setEditingBlockId(block.id)}><Pencil size={14} /></button><button disabled={blockIndex === 0} title="Block nach oben" onClick={() => setProject(moveBlock(project, block.id, -1))}><ArrowUp size={14} /></button><button disabled={blockIndex === blocks.length - 1} title="Block nach unten" onClick={() => setProject(moveBlock(project, block.id, 1))}><ArrowDown size={14} /></button><button title="Block duplizieren" onClick={() => setProject(duplicateBlock(project, block.id))}><Copy size={14} /></button><button title="Block löschen" onClick={() => removeBlock(block.id, sequences.length)}><Trash2 size={14} /></button></div></div>
+                return <article className={`golf-block ${sequences.length ? 'filled' : 'empty'} ${countsWithoutVideo ? 'count-only' : ''}`} key={block.id}><div className="block-head"><span className="block-order">{shotNumber ? `S${shotNumber}` : String(blockIndex + 1).padStart(2, '0')}</span><div>{shotNumber && <span className="stroke-context">SCHLAG {shotNumber} / PAR {holePar}</span>}<h3>{block.label}</h3><small>{sequences.length ? `${sequences.length} Sequenz${sequences.length === 1 ? '' : 'en'} · ${formatDuration(duration)}` : countsWithoutVideo ? 'Zählt im Schlagverlauf · kein Video nötig' : 'Noch nicht belegt'}{block.details.club ? ` · ${block.details.club}` : ''}{block.details.distanceMeters ? ` · ${block.details.distanceMeters} m` : ''}</small></div><div className="block-actions"><button className="add-clip-action" title="Clip hinzufügen" onClick={() => setClipBrowserBlockId(block.id)}><Plus size={14} /></button><button title="Schlagdetails und Schlagnummer bearbeiten" onClick={() => setEditingBlockId(block.id)}><Pencil size={14} /></button><button disabled={blockIndex === 0} title="Block nach oben" onClick={() => setProject(moveBlock(project, block.id, -1))}><ArrowUp size={14} /></button><button disabled={blockIndex === blocks.length - 1} title="Block nach unten" onClick={() => setProject(moveBlock(project, block.id, 1))}><ArrowDown size={14} /></button><button title="Block duplizieren" onClick={() => setProject(duplicateBlock(project, block.id))}><Copy size={14} /></button><button title="Block löschen" onClick={() => removeBlock(block.id, sequences.length)}><Trash2 size={14} /></button></div></div>
                     {sequences.length ? <div className="block-sequences">{sequences.map((sequence, index) => <div className="builder-sequence" key={sequence.id}><button className="builder-sequence-main" onClick={() => onOpenSequence(sequence.id)}><span><Play size={11} /></span><div><b>{sourceName(sequence)}</b><small>{frameTime(sequence.inFrame, sequence.sourceFps)} – {frameTime(sequence.outFrame, sequence.sourceFps)}</small></div></button><div className="sequence-order-actions"><button disabled={index === 0} title="Sequenz nach oben" onClick={() => setProject(moveSequence(project, block.id, sequence.id, -1))}><ArrowUp size={12} /></button><button disabled={index === sequences.length - 1} title="Sequenz nach unten" onClick={() => setProject(moveSequence(project, block.id, sequence.id, 1))}><ArrowDown size={12} /></button></div></div>)}</div> : countsWithoutVideo ? <div className="block-placeholder counted"><Check size={16} /><span>Bewusst ohne Aufnahme · wird nicht abgespielt</span></div> : <div className="block-placeholder"><Scissors size={16} /><span>Im Sichtungseditor zuweisen</span></div>}
                 </article>;
             })}</div><footer className="add-block"><select value={addType} onChange={(event) => setNewTypes((current) => ({ ...current, [player.id]: event.target.value as BlockType }))}>{BLOCK_TYPES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><button onClick={() => setProject(addBlock(project, hole, player.id, addType))}><Plus size={15} /> Block hinzufügen</button></footer></section>;
@@ -1859,6 +1884,7 @@ function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfPr
         {previewScope !== undefined && <RoughCutPreview project={project} setProject={setProject} onlyHole={previewScope === 'round' ? undefined : previewScope} onClose={() => setPreviewScope(undefined)} onEdit={(sequenceId) => { setPreviewScope(undefined); onOpenSequence(sequenceId); }} />}
         {scorecardOpen && <ScorecardEditor project={project} setProject={setProject} onClose={() => setScorecardOpen(false)} />}
         {editingBlockId && <BlockDetailsEditor project={project} blockId={editingBlockId} setProject={setProject} onClose={() => setEditingBlockId(undefined)} />}
+        {clipBrowserBlockId && project.blocks.find((block) => block.id === clipBrowserBlockId) && <BuilderClipBrowser project={project} block={project.blocks.find((block) => block.id === clipBrowserBlockId)!} onClose={() => setClipBrowserBlockId(undefined)} onChoose={(mediaId) => { const blockId = clipBrowserBlockId; setClipBrowserBlockId(undefined); onAddClip(mediaId, blockId); }} />}
     </section>;
 }
 
@@ -1938,6 +1964,7 @@ function Studio({ initialProject, onNew, mediaEngineStatus, onRetryMediaEngine }
     const [initialMediaId, setInitialMediaId] = useState<string>();
     const [initialSequenceId, setInitialSequenceId] = useState<string>();
     const [initialHole, setInitialHole] = useState<number>();
+    const [initialBlockId, setInitialBlockId] = useState<string>();
     const [saveState, setSaveState] = useState('Projekt lokal');
     const [dashboardOpen, setDashboardOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1948,11 +1975,12 @@ function Studio({ initialProject, onNew, mediaEngineStatus, onRetryMediaEngine }
             setSaveState(result.canceled ? 'Speichern abgebrochen' : 'Projekt gespeichert');
         } catch (error) { setSaveState(error instanceof Error ? error.message : 'Speichern fehlgeschlagen'); }
     };
-    const goReview = (mediaId?: string) => { setInitialMediaId(mediaId); setInitialSequenceId(undefined); setInitialHole(undefined); setScreen('review'); };
-    const openSequence = (sequenceId: string) => { setInitialSequenceId(sequenceId); setInitialMediaId(undefined); setInitialHole(undefined); setScreen('review'); };
-    const startHoleReview = (hole: number) => { setInitialSequenceId(undefined); setInitialMediaId(undefined); setInitialHole(hole); setScreen('review'); };
+    const goReview = (mediaId?: string) => { setInitialMediaId(mediaId); setInitialSequenceId(undefined); setInitialHole(undefined); setInitialBlockId(undefined); setScreen('review'); };
+    const openSequence = (sequenceId: string) => { setInitialSequenceId(sequenceId); setInitialMediaId(undefined); setInitialHole(undefined); setInitialBlockId(undefined); setScreen('review'); };
+    const startHoleReview = (hole: number) => { setInitialSequenceId(undefined); setInitialMediaId(undefined); setInitialHole(hole); setInitialBlockId(undefined); setScreen('review'); };
+    const addClipToBlock = (mediaId: string, blockId: string) => { setInitialMediaId(mediaId); setInitialSequenceId(undefined); setInitialHole(undefined); setInitialBlockId(blockId); setScreen('review'); };
     const navigate = (next: StudioScreen) => {
-        if (next === 'review') { setInitialMediaId(undefined); setInitialSequenceId(undefined); setInitialHole(undefined); }
+        if (next === 'review') { setInitialMediaId(undefined); setInitialSequenceId(undefined); setInitialHole(undefined); setInitialBlockId(undefined); }
         setScreen(next);
     };
     const content = screen === 'round'
@@ -1960,9 +1988,9 @@ function Studio({ initialProject, onNew, mediaEngineStatus, onRetryMediaEngine }
         : screen === 'import'
             ? <ImportScreen project={project} setProject={setProject} onReview={goReview} />
         : screen === 'review'
-            ? <ReviewScreen key={initialSequenceId ?? initialMediaId ?? (initialHole ? `hole-${initialHole}` : 'review')} project={project} setProject={setProject} initialMediaId={initialMediaId} initialSequenceId={initialSequenceId} initialHole={initialHole} />
+            ? <ReviewScreen key={initialSequenceId ?? `${initialMediaId ?? 'media'}:${initialBlockId ?? 'block'}:${initialHole ?? 'hole'}`} project={project} setProject={setProject} initialMediaId={initialMediaId} initialSequenceId={initialSequenceId} initialHole={initialHole} initialBlockId={initialBlockId} />
             : screen === 'build'
-                ? <RoundBuilder project={project} setProject={setProject} onOpenSequence={openSequence} />
+                ? <RoundBuilder project={project} setProject={setProject} onOpenSequence={openSequence} onAddClip={addClipToBlock} />
                 : <ExportScreen project={project} />;
     const platformLabel = window.golfStudio?.platform === 'win32' ? 'Windows' : window.golfStudio?.platform === 'darwin' ? 'macOS · Apple Silicon' : window.golfStudio?.platform ?? 'Desktop';
     const engineLabel = mediaEngineStatus?.ready
