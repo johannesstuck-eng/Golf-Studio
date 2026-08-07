@@ -20,6 +20,13 @@ export interface SequencePlaybackAudioSource {
     gainDb: number;
 }
 
+/** Switch on the last valid frame so a coarse timeupdate cannot show frames beyond a camera cut. */
+export function shouldAdvanceVideoCut(mediaTime: number, outFrame: number, sourceFps: number): boolean {
+    if (!Number.isFinite(mediaTime) || !Number.isFinite(outFrame) || !Number.isFinite(sourceFps) || sourceFps <= 0) return false;
+    const lastFrameStart = Math.max(0, (outFrame - 1) / sourceFps);
+    return mediaTime >= lastFrameStart - .0005;
+}
+
 export function sequencePlaybackSource(project: GolfProject, sequence: VirtualSequence, momentSeconds = 0, renderPlan?: RenderPlan): SequencePlaybackSource | null {
     const plan = renderPlan ?? compileRenderPlan(project, [sequence.id]);
     const momentUs = Math.max(0, Math.round(momentSeconds * 1_000_000));

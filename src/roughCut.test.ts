@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { createProject } from './model';
-import { sequencePlaybackAudioSource, sequencePlaybackSource, sequencePreviewSource } from './roughCut';
+import { sequencePlaybackAudioSource, sequencePlaybackSource, sequencePreviewSource, shouldAdvanceVideoCut } from './roughCut';
 import type { GolfProject, MediaItem, ProjectSettings, VirtualSequence } from './types';
 
 const settings: ProjectSettings = { id: 'round', course: 'Test Range', holes: 9, players: [{ id: 'joe', name: 'Joe' }], name: 'Test Range', createdAt: '' };
 const media = (id: string): MediaItem => ({ id, name: `${id}.mp4`, path: `${id}.mp4`, kind: 'video', device: id, deviceKey: id, recordedAt: '', durationSeconds: 300, width: 3840, height: 2160, fps: 59.94, codec: 'h264', audioCodec: 'aac', hasAudio: true, sizeBytes: 1 });
 
 describe('rough cut multicam playback', () => {
+    it('advances on the final valid video frame instead of waiting for a coarse timeupdate', () => {
+        expect(shouldAdvanceVideoCut(1.95, 60, 30)).toBe(false);
+        expect(shouldAdvanceVideoCut(59 / 30, 60, 30)).toBe(true);
+        expect(shouldAdvanceVideoCut(Number.NaN, 60, 30)).toBe(false);
+    });
+
     it('uses the selected camera and its synchronized local range', () => {
         const base = createProject(settings);
         const sequence: VirtualSequence = { id: 'shot', sourceType: 'group', sourceId: 'multicam', inFrame: 6752, outFrame: 7128, sourceFps: 59.94, activeMediaId: 'camera-b', multicamAngles: [
