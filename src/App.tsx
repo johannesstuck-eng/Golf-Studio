@@ -3,14 +3,14 @@ import {
     Aperture, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, CalendarClock, Camera, Check, ChevronLeft, ChevronRight,
     CircleHelp, ClipboardList, Clock3, Copy, Download, FileAudio, FileVideo, Film, Flag, FolderOpen, HardDrive,
     GripVertical, ImageUp, Import, Layers, LayoutDashboard, LayoutGrid, ListOrdered, MonitorPlay, Pause, Pencil, Play, Plus, RotateCcw, Save,
-    Crosshair, Scissors, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Trophy, Users, WandSparkles, X,
+    Crosshair, Scissors, Settings2, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Trophy, Users, WandSparkles, X,
 } from 'lucide-react';
 import {
     addBlock, addCountedStroke, applyScorecardTee, blockLabel, clearHoleBlockOrderOverride, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
     effectiveHoleBlockOrder, effectivePlayerOrder, hasHoleBlockOrderOverride, hasPlayerOrderOverride, markSequenceReviewed, moveBlock, moveBlockInHoleOrder, moveBlockInHoleOrderBy, movePlayerInOrder, moveSequence,
     multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom,
     playerHoleStrokeCount, setMediaAssignedHole, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore,
-    updateSequenceOverlay, updateShotTracer, upsertSequence,
+    updateProjectSettings, updateSequenceOverlay, updateShotTracer, upsertSequence,
 } from './model';
 import {
     BLOCK_TYPES,
@@ -236,13 +236,39 @@ function OptionButtons({ label, values, labels, value, onChange, suffix = '' }: 
     return <div><span className="field-label">{label}</span><div className={`segmented columns-${values.length}`}>{values.map((item, index) => <button type="button" className={value === item ? 'active' : ''} onClick={() => onChange(item)} key={item}>{labels?.[index] ?? item}{suffix}</button>)}</div></div>;
 }
 
-function TopBar({ project, screen, onScreen, onSave, onDashboard }: { project: GolfProject; screen: StudioScreen; onScreen: (value: StudioScreen) => void; onSave: () => void; onDashboard: () => void }) {
+function ProjectSettingsDialog({ project, onApply, onClose }: { project: GolfProject; onApply: (project: GolfProject) => void; onClose: () => void }) {
+    const [draft, setDraft] = useState(project.settings);
+    const [error, setError] = useState('');
+    const inactiveSequences = draft.holes < project.settings.holes
+        ? project.sequences.filter((sequence) => (project.blocks.find((block) => block.id === sequence.targetBlockId)?.hole ?? 0) > draft.holes).length
+        : 0;
+    const apply = () => {
+        try {
+            onApply(updateProjectSettings(project, draft));
+            onClose();
+        } catch (reason) {
+            setError(reason instanceof Error ? reason.message : 'Die Projekteinstellungen konnten nicht gespeichert werden.');
+        }
+    };
+    return <div className="data-editor-backdrop"><section className="project-settings-dialog"><header><div><div className="eyebrow"><span /> PROJEKTEINSTELLUNGEN</div><h2>Runde bearbeiten</h2><p>Diese Angaben steuern Sichtung, Round Builder und Export.</p></div><button className="preview-close" onClick={onClose}><X size={18} /></button></header>
+        <div className="project-settings-form"><label className="wide"><span>Golfplatz / Projektname</span><input value={draft.course} onChange={(event) => setDraft({ ...draft, course: event.target.value })} /></label>
+            <OptionButtons label="Rundenlänge" values={[9, 18]} value={draft.holes} onChange={(value) => setDraft({ ...draft, holes: value as 9 | 18 })} suffix=" Loch" />
+            <OptionButtons label="Ausrichtung" values={['horizontal', 'vertical']} labels={['Querformat', 'Hochformat']} value={draft.orientation ?? 'horizontal'} onChange={(value) => setDraft({ ...draft, orientation: value as 'horizontal' | 'vertical' })} />
+            <OptionButtons label="Auflösung" values={['1080p', '4K']} value={draft.resolution ?? '4K'} onChange={(value) => setDraft({ ...draft, resolution: value as '1080p' | '4K' })} />
+            <OptionButtons label="Bildrate" values={[30, 60]} value={draft.frameRate ?? 60} onChange={(value) => setDraft({ ...draft, frameRate: value as 30 | 60 })} suffix=" fps" />
+            <div className="settings-players wide"><span>Spieler</span>{draft.players.map((player, index) => <label key={player.id}><Users size={15} /><input value={player.name} onChange={(event) => setDraft({ ...draft, players: draft.players.map((item, playerIndex) => playerIndex === index ? { ...item, name: event.target.value } : item) })} /></label>)}</div>
+            {draft.holes < project.settings.holes && <div className="settings-preserve-note wide"><ShieldCheck size={18} /><div><b>Loch 10–18 werden ausgeblendet, nicht gelöscht.</b><span>{inactiveSequences ? `${inactiveSequences} bereits zugewiesene Sequenzen bleiben erhalten und erscheinen wieder, wenn du auf 18 Loch zurückstellst.` : 'Falls dort schon Daten liegen, bleiben sie im Projekt erhalten.'}</span></div></div>}
+            {error && <div className="inline-message wide">{error}</div>}
+        </div><footer><button className="secondary" onClick={onClose}>Abbrechen</button><button className="primary" onClick={apply}><Check size={15} /> Änderungen übernehmen</button></footer></section></div>;
+}
+
+function TopBar({ project, screen, onScreen, onSave, onDashboard, onSettings }: { project: GolfProject; screen: StudioScreen; onScreen: (value: StudioScreen) => void; onSave: () => void; onDashboard: () => void; onSettings: () => void }) {
     return <header className="topbar"><Brand /><nav className="steps">
         <button className={screen === 'round' ? 'active round-step' : 'round-step'} onClick={() => onScreen('round')}><Flag size={14} /> Round Desk</button><i />
         <button className={screen === 'import' ? 'active' : project.media.length ? 'done' : ''} onClick={() => onScreen('import')}><b>1</b> Import</button><i />
         <button className={screen === 'review' ? 'active' : project.sequences.length ? 'done' : ''} onClick={() => onScreen('review')}><b>2</b> Sichten</button><i />
         <button className={screen === 'build' ? 'active' : screen === 'export' ? 'done' : ''} onClick={() => onScreen('build')}><b>3</b> Runde bauen</button><i /><button className={screen === 'export' ? 'active' : ''} onClick={() => onScreen('export')}><b>4</b> Export</button>
-    </nav><div className="top-actions"><button className="icon-button" title="Mission Control" onClick={onDashboard}><LayoutDashboard size={18} /></button><button className="icon-button" title="Hilfe"><CircleHelp size={19} /></button><button className="secondary" onClick={onSave}><Save size={16} /> Speichern</button></div></header>;
+    </nav><div className="top-actions"><button className="icon-button" title="Projekteinstellungen" onClick={onSettings}><Settings2 size={18} /></button><button className="icon-button" title="Mission Control" onClick={onDashboard}><LayoutDashboard size={18} /></button><button className="icon-button" title="Hilfe"><CircleHelp size={19} /></button><button className="secondary" onClick={onSave}><Save size={16} /> Speichern</button></div></header>;
 }
 
 function Sidebar({ project, screen, onScreen, onNew }: { project: GolfProject; screen: StudioScreen; onScreen: (value: StudioScreen) => void; onNew: () => void }) {
@@ -256,7 +282,7 @@ function Sidebar({ project, screen, onScreen, onNew }: { project: GolfProject; s
             <button className={`side-link ${screen === 'export' ? 'active' : ''}`} onClick={() => onScreen('export')}><Download size={17} /> Export <span>{project.sequences.length || ''}</span></button>
             <button className="side-link"><Layers size={17} /> Multicam-Gruppen <span>{project.groups.length || ''}</span></button>
         </div>
-        <div className="side-section holes-section"><div className="side-label">RUNDE</div><div className="holes-grid">{Array.from({ length: project.settings.holes }, (_, index) => <button key={index}>L{index + 1}</button>)}</div><p>{project.blocks.length} vorbereitete Golfblöcke · {project.sequences.length} Sequenzen</p></div>
+        <div className="side-section holes-section"><div className="side-label">RUNDE</div><div className="holes-grid">{Array.from({ length: project.settings.holes }, (_, index) => <button key={index}>L{index + 1}</button>)}</div><p>{project.blocks.filter((block) => block.hole <= project.settings.holes).length} vorbereitete Golfblöcke · {project.sequences.length} Sequenzen</p></div>
         <button className="new-project" onClick={onNew}><Plus size={15} /> Neues Projekt</button>
     </aside>;
 }
@@ -373,6 +399,7 @@ function ImportScreen({ project, setProject, onReview }: ImportProps) {
 }
 
 interface ReviewProps { project: GolfProject; setProject: (project: GolfProject) => void; initialMediaId?: string; initialSequenceId?: string; initialHole?: number }
+type ReviewHoleFilter = 'all' | 'unassigned' | number;
 
 function WaveformRow({ label, values, localSeconds, durationSeconds, reference = false }: { label: string; values: number[]; localSeconds: number; durationSeconds: number; reference?: boolean }) {
     const analyzedDuration = Math.min(600, durationSeconds);
@@ -401,6 +428,7 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId, 
     const [playing, setPlaying] = useState(false);
     const [playSelection, setPlaySelection] = useState(false);
     const [hole, setHole] = useState(requestedBlock?.hole ?? initialHole ?? requestedMedia?.assignedHole ?? 1);
+    const [holeFilter, setHoleFilter] = useState<ReviewHoleFilter>(initialHole ?? 'all');
     const [playerId, setPlayerId] = useState(requestedBlock?.playerId ?? project.settings.players[0]?.id ?? '');
     const [blockType, setBlockType] = useState<BlockType>(requestedBlock?.type ?? 'tee-shot');
     const [targetBlockId, setTargetBlockId] = useState(requestedBlock?.id ?? '');
@@ -411,15 +439,33 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId, 
     const [syncBusy, setSyncBusy] = useState(false);
     const [syncOpen, setSyncOpen] = useState(false);
     const [draftSyncOffset, setDraftSyncOffset] = useState(0);
+    const filteredMedia = useMemo(() => project.media.filter((media) => {
+        if (holeFilter === 'all') return true;
+        return holeFilter === 'unassigned' ? !media.assignedHole : media.assignedHole === holeFilter;
+    }), [holeFilter, project.media]);
+    const filteredGroups = useMemo(() => project.groups.filter((group) => {
+        if (holeFilter === 'all') return true;
+        const assignments = group.mediaIds.map((id) => project.media.find((media) => media.id === id)?.assignedHole).filter(Boolean);
+        return holeFilter === 'unassigned' ? assignments.length === 0 : assignments.includes(holeFilter);
+    }), [holeFilter, project.groups, project.media]);
+    useEffect(() => {
+        const sources = sourceType === 'media' ? filteredMedia : filteredGroups;
+        if (!sources.some((item) => item.id === sourceId)) setSourceId(sources[0]?.id ?? '');
+    }, [filteredGroups, filteredMedia, sourceId, sourceType]);
+    useEffect(() => {
+        if (hole > project.settings.holes) { setHole(1); setTargetBlockId(''); }
+        if (typeof holeFilter === 'number' && holeFilter > project.settings.holes) setHoleFilter('all');
+    }, [hole, holeFilter, project.settings.holes]);
     const currentGroup = sourceType === 'group' ? project.groups.find((group) => group.id === sourceId) : undefined;
     const groupTimeline = sourceType === 'group' ? multicamTimeline(project, sourceId) : null;
     const groupMedia = groupTimeline?.media ?? [];
     const source = sourceType === 'media'
         ? project.media.find((media) => media.id === sourceId)
         : groupMedia.find((media) => media.id === activeMediaId) ?? groupMedia[0];
-    const sourceAssignedHole = sourceType === 'media'
+    const storedSourceHole = sourceType === 'media'
         ? source?.assignedHole
         : groupMedia.find((media) => media.assignedHole)?.assignedHole;
+    const sourceAssignedHole = storedSourceHole && storedSourceHole <= project.settings.holes ? storedSourceHole : undefined;
     const activeSyncOffset = sourceType === 'group' && source ? multicamSyncOffset(project, sourceId, source.id) : 0;
     const fps = sourceType === 'group'
         ? groupTimeline?.fps ?? project.settings.frameRate ?? 30
@@ -560,8 +606,9 @@ function ReviewScreen({ project, setProject, initialMediaId, initialSequenceId, 
     const contextSummary = summarizeRoundDesk(project);
     const contextHoleSummary = contextSummary.holes.find((item) => item.hole === hole);
     return <section className="review-workspace">
-        <aside className="source-browser"><div className="source-tabs"><button className={sourceType === 'media' ? 'active' : ''} onClick={() => { setSourceType('media'); setSourceId(project.media[0]?.id ?? ''); }}>Clips</button><button className={sourceType === 'group' ? 'active' : ''} onClick={() => { setSourceType('group'); setSourceId(project.groups[0]?.id ?? ''); }}>Multicam</button></div>
-            <div className="source-list">{sourceType === 'media' ? project.media.map((media) => <button className={sourceId === media.id ? 'active' : ''} onClick={() => setSourceId(media.id)} key={media.id}><MediaIcon media={media} /><span><b>{media.name}</b><small>{media.assignedHole ? `LOCH ${media.assignedHole} · ` : ''}{formatDuration(media.durationSeconds)} · {media.fps ?? '?'} fps</small></span><em className={media.assignedHole ? 'hole-assigned' : ''}>{media.assignedHole ? `L${media.assignedHole}` : project.sequences.filter((sequence) => sequence.sourceType === 'media' && sequence.sourceId === media.id).length}</em></button>) : project.groups.map((group) => <button className={sourceId === group.id ? 'active' : ''} onClick={() => setSourceId(group.id)} key={group.id}><div className="group-icon"><Layers size={20} /></div><span><b>{group.name}</b><small>{group.mediaIds.length} Quellen</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'group' && sequence.sourceId === group.id).length}</em></button>)}</div>
+        <aside className="source-browser"><div className="source-tabs"><button className={sourceType === 'media' ? 'active' : ''} onClick={() => setSourceType('media')}>Clips</button><button className={sourceType === 'group' ? 'active' : ''} onClick={() => setSourceType('group')}>Multicam</button></div>
+            <label className="source-hole-filter"><Flag size={14} /><select value={String(holeFilter)} onChange={(event) => setHoleFilter(event.target.value === 'all' || event.target.value === 'unassigned' ? event.target.value : Number(event.target.value))}><option value="all">Alle Löcher</option><option value="unassigned">Nicht zugeordnet</option>{Array.from({ length: project.settings.holes }, (_, index) => <option value={index + 1} key={index}>Loch {index + 1}</option>)}</select><span>{sourceType === 'media' ? filteredMedia.length : filteredGroups.length}</span></label>
+            <div className="source-list">{sourceType === 'media' ? filteredMedia.map((media) => <button className={sourceId === media.id ? 'active' : ''} onClick={() => setSourceId(media.id)} key={media.id}><MediaIcon media={media} /><span><b>{media.name}</b><small>{media.assignedHole ? `LOCH ${media.assignedHole} · ` : ''}{formatDuration(media.durationSeconds)} · {media.fps ?? '?'} fps</small></span><em className={media.assignedHole ? 'hole-assigned' : ''}>{media.assignedHole ? `L${media.assignedHole}` : project.sequences.filter((sequence) => sequence.sourceType === 'media' && sequence.sourceId === media.id).length}</em></button>) : filteredGroups.map((group) => <button className={sourceId === group.id ? 'active' : ''} onClick={() => setSourceId(group.id)} key={group.id}><div className="group-icon"><Layers size={20} /></div><span><b>{group.name}</b><small>{group.mediaIds.length} Quellen</small></span><em>{project.sequences.filter((sequence) => sequence.sourceType === 'group' && sequence.sourceId === group.id).length}</em></button>)}</div>
         </aside>
         <div className="review-main">{source ? <>{contextHoleSummary && <div className="moment-round-context"><span>GEPRÜFT {contextSummary.productionProgress}%</span><i /><b>LOCH {contextHoleSummary.hole}</b><small>{PRODUCTION_STATUS_COPY[contextHoleSummary.productionStatus]}</small></div>}<div className="review-heading"><div><div className="eyebrow"><span /> SICHTEN & ZUWEISEN</div><h1>{sourceType === 'group' ? project.groups.find((group) => group.id === sourceId)?.name : source.name}</h1><p>{sourceType === 'group' ? `${visibleGroupMedia.length || groupMedia.length} Kameras am aktuellen Zeitpunkt · aktive Perspektive: ${source.name}` : `${source.device} · ${source.width ?? 'Audio'}${source.height ? `×${source.height}` : ''} · ${fps} fps`}</p>{sourceAssignedHole && <span className="review-source-hole">VORSORTIERT · LOCH {sourceAssignedHole}</span>}</div><div className="keyboard-hints"><kbd>←</kbd><kbd>→</kbd> Frame · <kbd>I</kbd> In · <kbd>O</kbd> Out · <kbd>Leertaste</kbd> Play</div></div>
             {sourceType === 'group' && <div className="camera-monitor-grid">{(visibleGroupMedia.length ? visibleGroupMedia : groupMedia.slice(0, 4)).map((media) => <button className={media.id === source.id ? 'active' : ''} onClick={() => { player()?.pause(); setActiveMediaId(media.id); }} key={media.id}><video muted preload="metadata" src={fileUrl(media.path)} ref={(element) => { if (element) previewRefs.current.set(media.id, element); else previewRefs.current.delete(media.id); }} onLoadedMetadata={(event) => { event.currentTarget.currentTime = mediaTimeForFrame(currentFrame, media); }} /><span><b>{media.device}</b><small>{media.name}</small></span>{media.id === source.id && <em>AKTIV</em>}</button>)}</div>}
@@ -659,7 +706,7 @@ function ScorecardEditor({ project, setProject, onClose }: { project: GolfProjec
             return <button className={tee.id === selectedTeeId ? 'active' : ''} onClick={() => setSelectedTeeId(tee.id)} key={tee.id}><b>{tee.label}</b><small>{totalMeters.toLocaleString('de-DE')} m · Par {totalPar}</small></button>;
         })}</div><div className="scorecard-analysis-preview">{selectedTee.holes.map((hole) => <span key={hole.number}><b>{hole.number}</b><small>Par {hole.par}</small><em>{hole.lengthMeters} m</em></span>)}</div><button className="primary scorecard-apply" onClick={applyRecognizedData}><Check size={16} /> Abschlag {selectedTee.label} und {selectedTee.holes.length} Löcher übernehmen</button></section>}
         {analysis?.status === 'manual' && isImage && sourcePath && <div className="scorecard-reference-preview"><img src={fileUrl(sourcePath)} alt="Ausgewählte Scorecard" /><p>Foto bereit zur manuellen Übertragung. Eine automatische Fotoerkennung ist noch nicht aktiv.</p></div>}
-        <div className="scorecard-table" style={{ gridTemplateColumns: `55px 85px 100px 75px 110px repeat(${project.settings.players.length}, minmax(95px, 1fr))` }}><div className="scorecard-head"><span>LOCH</span><span>PAR</span><span>LÄNGE (M)</span><span>HCP</span><span>ABSCHLAG</span>{project.settings.players.map((player) => <span key={player.id}>SCORE {player.name.toUpperCase()}</span>)}</div>{project.courseData.holes.map((hole) => <div className="scorecard-row" key={hole.number}><b>{hole.number}</b><select value={hole.par} onChange={(event) => setProject(updateHoleData(project, hole.number, { par: Number(event.target.value) }))}>{[3, 4, 5, 6].map((par) => <option value={par} key={par}>Par {par}</option>)}</select><input type="number" min={0} value={hole.lengthMeters ?? ''} placeholder="–" onChange={(event) => setProject(updateHoleData(project, hole.number, { lengthMeters: nullableNumber(event.target.value) }))} /><input type="number" min={1} max={project.settings.holes} value={hole.strokeIndex ?? ''} placeholder="–" onChange={(event) => setProject(updateHoleData(project, hole.number, { strokeIndex: nullableNumber(event.target.value) }))} /><input value={hole.teeColor} placeholder="z. B. Gelb" onChange={(event) => setProject(updateHoleData(project, hole.number, { teeColor: event.target.value }))} />{project.settings.players.map((player) => {
+        <div className="scorecard-table" style={{ gridTemplateColumns: `55px 85px 100px 75px 110px repeat(${project.settings.players.length}, minmax(95px, 1fr))` }}><div className="scorecard-head"><span>LOCH</span><span>PAR</span><span>LÄNGE (M)</span><span>HCP</span><span>ABSCHLAG</span>{project.settings.players.map((player) => <span key={player.id}>SCORE {player.name.toUpperCase()}</span>)}</div>{project.courseData.holes.filter((hole) => hole.number <= project.settings.holes).map((hole) => <div className="scorecard-row" key={hole.number}><b>{hole.number}</b><select value={hole.par} onChange={(event) => setProject(updateHoleData(project, hole.number, { par: Number(event.target.value) }))}>{[3, 4, 5, 6].map((par) => <option value={par} key={par}>Par {par}</option>)}</select><input type="number" min={0} value={hole.lengthMeters ?? ''} placeholder="–" onChange={(event) => setProject(updateHoleData(project, hole.number, { lengthMeters: nullableNumber(event.target.value) }))} /><input type="number" min={1} max={project.settings.holes} value={hole.strokeIndex ?? ''} placeholder="–" onChange={(event) => setProject(updateHoleData(project, hole.number, { strokeIndex: nullableNumber(event.target.value) }))} /><input value={hole.teeColor} placeholder="z. B. Gelb" onChange={(event) => setProject(updateHoleData(project, hole.number, { teeColor: event.target.value }))} />{project.settings.players.map((player) => {
             const score = project.playerScores.find((item) => item.hole === hole.number && item.playerId === player.id);
             return <input type="number" min={1} value={score?.strokes ?? ''} placeholder="–" aria-label={`Score ${player.name} Loch ${hole.number}`} onChange={(event) => setProject(updatePlayerScore(project, hole.number, player.id, nullableNumber(event.target.value)))} key={player.id} />;
         })}</div>)}</div>
@@ -1865,6 +1912,7 @@ function Studio({ initialProject, onNew, mediaEngineStatus, onRetryMediaEngine }
     const [initialHole, setInitialHole] = useState<number>();
     const [saveState, setSaveState] = useState('Projekt lokal');
     const [dashboardOpen, setDashboardOpen] = useState(false);
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const save = async () => {
         if (!window.golfStudio) return setSaveState('Speichern nur in der Desktop-App verfügbar');
         try {
@@ -1893,7 +1941,7 @@ function Studio({ initialProject, onNew, mediaEngineStatus, onRetryMediaEngine }
         ? `Media Engine · FFmpeg ${mediaEngineStatus.ffmpeg.version}`
         : mediaEngineStatus ? 'Media Engine nicht verfügbar' : 'Media Engine wird geprüft';
     if (dashboardOpen) return <Dashboard onClose={() => setDashboardOpen(false)} />;
-    return <main className="studio-shell"><TopBar project={project} screen={screen} onScreen={navigate} onSave={save} onDashboard={() => setDashboardOpen(true)} /><Sidebar project={project} screen={screen} onScreen={navigate} onNew={onNew} />{content}<footer className="statusbar"><span><span className="status-dot" /> {saveState}</span><span className={mediaEngineStatus && !mediaEngineStatus.ready ? 'engine-error' : ''}><span className="status-dot" /> {engineLabel}{mediaEngineStatus && !mediaEngineStatus.ready && <button type="button" onClick={onRetryMediaEngine}>Erneut prüfen</button>}</span><span><HardDrive size={13} /> Lokal · {platformLabel}</span></footer></main>;
+    return <main className="studio-shell"><TopBar project={project} screen={screen} onScreen={navigate} onSave={save} onDashboard={() => setDashboardOpen(true)} onSettings={() => setSettingsOpen(true)} /><Sidebar project={project} screen={screen} onScreen={navigate} onNew={onNew} />{content}<footer className="statusbar"><span><span className="status-dot" /> {saveState}</span><span className={mediaEngineStatus && !mediaEngineStatus.ready ? 'engine-error' : ''}><span className="status-dot" /> {engineLabel}{mediaEngineStatus && !mediaEngineStatus.ready && <button type="button" onClick={onRetryMediaEngine}>Erneut prüfen</button>}</span><span><HardDrive size={13} /> Lokal · {platformLabel}</span></footer>{settingsOpen && <ProjectSettingsDialog project={project} onApply={(updated) => { setProject(updated); setSaveState('Projekteinstellungen geändert · noch nicht gespeichert'); }} onClose={() => setSettingsOpen(false)} />}</main>;
 }
 
 export default function App() {

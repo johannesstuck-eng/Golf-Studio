@@ -168,9 +168,13 @@ export function normalizeProject(input: unknown): GolfProject {
         : createDefaultBlocks(settings);
     const defaultCourseData = createDefaultCourseData(settings);
     const rawHoles = raw.courseData?.holes ?? [];
+    const inactiveHoles = rawHoles.filter((hole) => hole.number > settings.holes && hole.number <= 18);
     const courseData = {
         scorecardSourcePath: raw.courseData?.scorecardSourcePath ?? null,
-        holes: defaultCourseData.holes.map((hole) => ({ ...hole, ...(rawHoles.find((item) => item.number === hole.number) ?? {}) })),
+        holes: [
+            ...defaultCourseData.holes.map((hole) => ({ ...hole, ...(rawHoles.find((item) => item.number === hole.number) ?? {}) })),
+            ...inactiveHoles,
+        ].sort((left, right) => left.number - right.number),
     };
     const migratedFromV8 = (raw.schemaVersion ?? 0) < 9;
     const sequences: GolfProject['sequences'] = Array.isArray(raw.sequences) ? raw.sequences.map((sequence) => {
@@ -242,7 +246,7 @@ export function normalizeProject(input: unknown): GolfProject {
         settings,
         media: Array.isArray(raw.media) ? raw.media.map((media) => ({
             ...media,
-            assignedHole: Number.isInteger(media.assignedHole) && media.assignedHole! >= 1 && media.assignedHole! <= settings.holes ? media.assignedHole : null,
+            assignedHole: Number.isInteger(media.assignedHole) && media.assignedHole! >= 1 && media.assignedHole! <= 18 ? media.assignedHole : null,
         })) : [],
         suggestions: Array.isArray(raw.suggestions) ? raw.suggestions : [],
         groups: Array.isArray(raw.groups) ? raw.groups.map((group) => ({
@@ -353,6 +357,31 @@ export function setMediaAssignedHole(project: GolfProject, mediaId: string, hole
         ...project,
         schemaVersion: 11,
         media: project.media.map((media) => media.id === mediaId ? { ...media, assignedHole } : media),
+        modifiedAt: new Date().toISOString(),
+    };
+}
+
+export function updateProjectSettings(
+    project: GolfProject,
+    patch: Pick<ProjectSettings, 'course' | 'holes' | 'players' | 'orientation' | 'resolution' | 'frameRate'>,
+): GolfProject {
+    const course = patch.course.trim();
+    if (!course) throw new Error('Der Golfplatz darf nicht leer sein.');
+    if (patch.holes !== 9 && patch.holes !== 18) throw new Error('Eine Runde muss 9 oder 18 Löcher haben.');
+    const players = patch.players.map((player) => ({ ...player, name: player.name.trim() }));
+    if (!players.length || players.some((player) => !player.name)) throw new Error('Alle Spieler benötigen einen Namen.');
+    const settings: ProjectSettings = { ...project.settings, ...patch, course, players, name: `${course} · ${patch.holes} Loch` };
+    const blockKeys = new Set(project.blocks.map((block) => `${block.hole}:${block.playerId}:${block.type}`));
+    const addedBlocks = createDefaultBlocks(settings).filter((block) => !blockKeys.has(`${block.hole}:${block.playerId}:${block.type}`));
+    const holesByNumber = new Map(project.courseData.holes.map((hole) => [hole.number, hole]));
+    for (const hole of createDefaultCourseData(settings).holes) {
+        if (!holesByNumber.has(hole.number)) holesByNumber.set(hole.number, hole);
+    }
+    return {
+        ...project,
+        settings,
+        blocks: [...project.blocks, ...addedBlocks],
+        courseData: { ...project.courseData, holes: [...holesByNumber.values()].sort((left, right) => left.number - right.number) },
         modifiedAt: new Date().toISOString(),
     };
 }
