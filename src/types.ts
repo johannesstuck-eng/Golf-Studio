@@ -43,6 +43,8 @@ export interface MediaItem {
     colorPrimaries?: string | null;
     audioSampleRate?: number | null;
     audioChannels?: number | null;
+    /** Optional manual pre-sort used to carry a clip's hole context into review. */
+    assignedHole?: number | null;
 }
 
 export type ExportProfileId = 'source-matched' | 'lossless-master';

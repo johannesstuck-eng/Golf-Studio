@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, addCountedStroke, applyScorecardTee, automaticPlayerOrder, clearHoleBlockOrderOverride, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectiveHoleBlockOrder, effectivePlayerOrder, hasHoleBlockOrderOverride, hasPlayerOrderOverride, moveBlock, moveBlockInHoleOrder, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerHoleStrokeCount, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
+import { addBlock, addCountedStroke, applyScorecardTee, automaticPlayerOrder, clearHoleBlockOrderOverride, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectiveHoleBlockOrder, effectivePlayerOrder, hasHoleBlockOrderOverride, hasPlayerOrderOverride, moveBlock, moveBlockInHoleOrder, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerHoleStrokeCount, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMediaAssignedHole, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
 import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
@@ -26,7 +26,7 @@ describe('project model', () => {
     it('upgrades old projects without losing media', () => {
         const old = { schemaVersion: 1, settings, media: [{ id: 'media-1' }], suggestions: [], groups: [] };
         const project = normalizeProject(old);
-        expect(project.schemaVersion).toBe(10);
+        expect(project.schemaVersion).toBe(11);
         expect(project.media).toHaveLength(1);
         expect(project.blocks).toHaveLength(36);
         expect(project.sequences).toEqual([]);
@@ -151,6 +151,27 @@ describe('project model', () => {
         expect(suggestions.every((suggestion) => suggestion.confidence === 'high')).toBe(true);
     });
 
+    it('suggests overlapping clips from separate counters of identical DJI cameras', () => {
+        const base = {
+            kind: 'video' as const, path: 'C:\\Clips\\round', device: 'DJI Osmo Pocket', deviceKey: 'dji-osmo-pocket:round',
+            width: 3840, height: 2160, fps: 59.94, codec: 'h264', audioCodec: 'aac', hasAudio: true, sizeBytes: 1000,
+        };
+        const media: MediaItem[] = [
+            { ...base, id: 'camera-a', name: 'DJI_20260807102902_0010_D.MP4', recordedAt: '2026-08-07T08:29:02.000Z', durationSeconds: 15 },
+            { ...base, id: 'camera-b', name: 'DJI_20260807102910_0054_D.MP4', recordedAt: '2026-08-07T08:29:10.000Z', durationSeconds: 56 },
+        ];
+        expect(suggestMulticam(media)).toHaveLength(1);
+        expect(suggestMulticam(media)[0].mediaIds).toEqual(['camera-a', 'camera-b']);
+    });
+
+    it('persists and validates the manual hole assignment of imported clips', () => {
+        const media = { id: 'clip', name: 'clip.mp4', path: 'clip.mp4', kind: 'video' as const, device: 'Camera', deviceKey: 'camera', recordedAt: '', durationSeconds: 10, width: 1920, height: 1080, fps: 30, codec: 'h264', audioCodec: 'aac', hasAudio: true, sizeBytes: 1 };
+        const project = { ...createProject(settings), media: [media] };
+        expect(setMediaAssignedHole(project, 'clip', 4).media[0].assignedHole).toBe(4);
+        expect(setMediaAssignedHole(project, 'clip', 99).media[0].assignedHole).toBeNull();
+        expect(normalizeProject({ ...project, media: [{ ...media, assignedHole: 99 }] }).media[0].assignedHole).toBeNull();
+    });
+
     it('transfers every overlapping camera angle on the shared multicam timeline', () => {
         const project = createProject(settings);
         const mediaBase = { name: 'clip.mp4', kind: 'video' as const, device: 'Camera', deviceKey: 'camera', width: 1920, height: 1080, codec: 'h264', audioCodec: 'aac', hasAudio: true, sizeBytes: 1000 };
@@ -203,7 +224,7 @@ describe('project model', () => {
 
         const synced = setMulticamSyncOffset(groupProject, 'group', 'late-content', 1.5);
 
-        expect(synced.schemaVersion).toBe(10);
+        expect(synced.schemaVersion).toBe(11);
         expect(synced.groups[0]).toMatchObject({ syncStatus: 'manual', syncOffsetsSeconds: { 'late-content': 1.5 } });
         expect(synced.sequences[0].multicamAngles).toEqual([
             { mediaId: 'reference', inFrame: 60, outFrame: 300, sourceFps: 30 },
@@ -284,7 +305,7 @@ describe('project model', () => {
     it('upgrades legacy tracer tracks with render defaults', () => {
         const project = createProject(settings);
         const migrated = normalizeProject({ ...project, schemaVersion: 5, shotTracers: [{ id: 'legacy', sequenceId: 'sequence', enabled: true, impactFrame: 0, endFrame: 30, disappearFrame: 40, points: [{ frame: 0, x: 2, y: -.5 }] }] });
-        expect(migrated.schemaVersion).toBe(10);
+        expect(migrated.schemaVersion).toBe(11);
         expect(migrated.shotTracers[0]).toMatchObject({ color: '#c8ff42', thickness: 5, glow: 12, smoothing: .72, tailLength: .16, occlusionStartFrame: null, occlusionEndFrame: null, cameraLock: null });
         expect(migrated.shotTracers[0].points[0]).toMatchObject({ x: 1, y: 0 });
     });
@@ -295,7 +316,7 @@ describe('project model', () => {
             sourceFps: 60, hole: 1, playerId: 'joe', blockType: 'tee-shot',
         });
         const sequence = project.sequences[0];
-        expect(project.schemaVersion).toBe(10);
+        expect(project.schemaVersion).toBe(11);
         expect(sequenceDurationUs(sequence)).toBe(2_000_000);
         expect(sequence.videoCuts).toEqual([{
             id: `${sequence.id}-cut-1`, mediaId: 'camera-a', startUs: 0, endUs: 2_000_000, origin: 'automatic',
