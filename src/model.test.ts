@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBlock, addCountedStroke, applyScorecardTee, automaticPlayerOrder, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectivePlayerOrder, hasPlayerOrderOverride, moveBlock, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerHoleStrokeCount, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
+import { addBlock, addCountedStroke, applyScorecardTee, automaticPlayerOrder, clearHoleBlockOrderOverride, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock, effectiveHoleBlockOrder, effectivePlayerOrder, hasHoleBlockOrderOverride, hasPlayerOrderOverride, moveBlock, moveBlockInHoleOrder, movePlayerInOrder, moveSequence, multicamAnglesForRange, multicamTimeline, normalizeProject, playerHoleStrokeCount, playerScoreToPar, proposeShotTracer, roughCutSequenceIds, sequenceDurationUs, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceActiveMedia, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore, updateSequenceOverlay, updateShotTracer, upsertSequence, videoCutPlanIsValid } from './model';
 import type { MediaItem, ProjectSettings } from './types';
 
 const settings: ProjectSettings = {
@@ -26,12 +26,13 @@ describe('project model', () => {
     it('upgrades old projects without losing media', () => {
         const old = { schemaVersion: 1, settings, media: [{ id: 'media-1' }], suggestions: [], groups: [] };
         const project = normalizeProject(old);
-        expect(project.schemaVersion).toBe(9);
+        expect(project.schemaVersion).toBe(10);
         expect(project.media).toHaveLength(1);
         expect(project.blocks).toHaveLength(36);
         expect(project.sequences).toEqual([]);
         expect(project.overlays).toEqual([]);
         expect(project.playerOrders).toEqual([]);
+        expect(project.holeBlockOrders).toEqual([]);
         expect(project.courseData.holes).toHaveLength(9);
         expect(project.courseData.holes[0].par).toBe(4);
     });
@@ -87,6 +88,21 @@ describe('project model', () => {
         expect(roughCutSequenceIds(project, 1).map((id) => project.sequences.find((sequence) => sequence.id === id)!.sourceId)).toEqual(['ferdi-tee', 'joe-tee', 'joe-approach']);
         expect(hasPlayerOrderOverride(project, 1, 0)).toBe(true);
         expect(effectivePlayerOrder(clearPlayerOrderOverride(project, 1, 0), 1, 0)).toEqual(['joe', 'ferdi']);
+    });
+
+    it('stores the true block order for a hole and uses it for preview and export', () => {
+        const twoPlayers = { ...settings, players: [...settings.players, { id: 'ferdi', name: 'Ferdi' }] };
+        let project = createProject(twoPlayers);
+        project = upsertSequence(project, { sourceType: 'media', sourceId: 'joe-tee', inFrame: 0, outFrame: 30, sourceFps: 30, hole: 1, playerId: 'joe', blockType: 'tee-shot' });
+        project = upsertSequence(project, { sourceType: 'media', sourceId: 'ferdi-tee', inFrame: 0, outFrame: 30, sourceFps: 30, hole: 1, playerId: 'ferdi', blockType: 'tee-shot' });
+        project = upsertSequence(project, { sourceType: 'media', sourceId: 'joe-approach', inFrame: 0, outFrame: 30, sourceFps: 30, hole: 1, playerId: 'joe', blockType: 'approach' });
+        const joeTee = project.blocks.find((block) => block.hole === 1 && block.playerId === 'joe' && block.type === 'tee-shot')!;
+        const ferdiTee = project.blocks.find((block) => block.hole === 1 && block.playerId === 'ferdi' && block.type === 'tee-shot')!;
+        project = moveBlockInHoleOrder(project, 1, ferdiTee.id, joeTee.id);
+        expect(hasHoleBlockOrderOverride(project, 1)).toBe(true);
+        expect(effectiveHoleBlockOrder(project, 1).slice(0, 2)).toEqual([ferdiTee.id, joeTee.id]);
+        expect(roughCutSequenceIds(project, 1).map((id) => project.sequences.find((sequence) => sequence.id === id)!.sourceId)).toEqual(['ferdi-tee', 'joe-tee', 'joe-approach']);
+        expect(hasHoleBlockOrderOverride(clearHoleBlockOrderOverride(project, 1), 1)).toBe(false);
     });
 
     it('derives player order from In frames in one clip and timestamps across clips', () => {
@@ -187,7 +203,7 @@ describe('project model', () => {
 
         const synced = setMulticamSyncOffset(groupProject, 'group', 'late-content', 1.5);
 
-        expect(synced.schemaVersion).toBe(9);
+        expect(synced.schemaVersion).toBe(10);
         expect(synced.groups[0]).toMatchObject({ syncStatus: 'manual', syncOffsetsSeconds: { 'late-content': 1.5 } });
         expect(synced.sequences[0].multicamAngles).toEqual([
             { mediaId: 'reference', inFrame: 60, outFrame: 300, sourceFps: 30 },
@@ -268,7 +284,7 @@ describe('project model', () => {
     it('upgrades legacy tracer tracks with render defaults', () => {
         const project = createProject(settings);
         const migrated = normalizeProject({ ...project, schemaVersion: 5, shotTracers: [{ id: 'legacy', sequenceId: 'sequence', enabled: true, impactFrame: 0, endFrame: 30, disappearFrame: 40, points: [{ frame: 0, x: 2, y: -.5 }] }] });
-        expect(migrated.schemaVersion).toBe(9);
+        expect(migrated.schemaVersion).toBe(10);
         expect(migrated.shotTracers[0]).toMatchObject({ color: '#c8ff42', thickness: 5, glow: 12, smoothing: .72, tailLength: .16, occlusionStartFrame: null, occlusionEndFrame: null, cameraLock: null });
         expect(migrated.shotTracers[0].points[0]).toMatchObject({ x: 1, y: 0 });
     });
@@ -279,7 +295,7 @@ describe('project model', () => {
             sourceFps: 60, hole: 1, playerId: 'joe', blockType: 'tee-shot',
         });
         const sequence = project.sequences[0];
-        expect(project.schemaVersion).toBe(9);
+        expect(project.schemaVersion).toBe(10);
         expect(sequenceDurationUs(sequence)).toBe(2_000_000);
         expect(sequence.videoCuts).toEqual([{
             id: `${sequence.id}-cut-1`, mediaId: 'camera-a', startUs: 0, endUs: 2_000_000, origin: 'automatic',

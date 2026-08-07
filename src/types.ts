@@ -304,6 +304,11 @@ export interface PlayerOrder {
     playerIds: string[];
 }
 
+export interface HoleBlockOrder {
+    hole: number;
+    blockIds: string[];
+}
+
 export interface GolfProject {
     schemaVersion: number;
     settings: ProjectSettings;
@@ -315,6 +320,7 @@ export interface GolfProject {
     overlays: SequenceOverlay[];
     shotTracers: ShotTracerEffect[];
     playerOrders: PlayerOrder[];
+    holeBlockOrders: HoleBlockOrder[];
     courseData: CourseData;
     playerScores: PlayerHoleScore[];
     modifiedAt: string;

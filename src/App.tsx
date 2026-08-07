@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Aperture, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, CalendarClock, Camera, Check, ChevronLeft, ChevronRight,
     CircleHelp, ClipboardList, Clock3, Copy, Download, FileAudio, FileVideo, Film, Flag, FolderOpen, HardDrive,
-    ImageUp, Import, Layers, LayoutDashboard, LayoutGrid, MonitorPlay, Pause, Pencil, Play, Plus, RotateCcw, Save,
+    GripVertical, ImageUp, Import, Layers, LayoutDashboard, LayoutGrid, ListOrdered, MonitorPlay, Pause, Pencil, Play, Plus, RotateCcw, Save,
     Crosshair, Scissors, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Trophy, Users, WandSparkles, X,
 } from 'lucide-react';
 import {
-    addBlock, addCountedStroke, applyScorecardTee, blockLabel, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
-    effectivePlayerOrder, hasPlayerOrderOverride, markSequenceReviewed, moveBlock, movePlayerInOrder, moveSequence,
+    addBlock, addCountedStroke, applyScorecardTee, blockLabel, clearHoleBlockOrderOverride, clearPlayerOrderOverride, createProject, deleteBlock, duplicateBlock,
+    effectiveHoleBlockOrder, effectivePlayerOrder, hasHoleBlockOrderOverride, hasPlayerOrderOverride, markSequenceReviewed, moveBlock, moveBlockInHoleOrder, moveBlockInHoleOrderBy, movePlayerInOrder, moveSequence,
     multicamAnglesForRange, multicamMediaStartMs, multicamSyncOffset, multicamTimeline, normalizeProject, playerScoreToPar, proposeShotTracer, removeSequence, roughCutSequenceIds, setMulticamSyncOffset, setMulticamSyncOffsets, setScorecardSource, setSequenceCameraCutBoundary, setSequenceCameraForMoment, setSequenceCameraFrom,
     playerHoleStrokeCount, strokeNumberForBlock, suggestMulticam, toggleSequenceOverlay, toggleShotTracer, updateBlockDetails, updateHoleData, updatePlayerScore,
     updateSequenceOverlay, updateShotTracer, upsertSequence,
@@ -1657,6 +1657,9 @@ function RoundDesk({ project, setProject, onNavigate, onOpenSequence, onStartHol
 
 function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfProject; setProject: (project: GolfProject) => void; onOpenSequence: (sequenceId: string) => void }) {
     const [hole, setHole] = useState(1);
+    const [builderView, setBuilderView] = useState<'players' | 'order'>('players');
+    const [draggedBlockId, setDraggedBlockId] = useState<string>();
+    const [dragOverBlockId, setDragOverBlockId] = useState<string>();
     const [newTypes, setNewTypes] = useState<Record<string, BlockType>>({});
     const [previewScope, setPreviewScope] = useState<'round' | number>();
     const [scorecardOpen, setScorecardOpen] = useState(false);
@@ -1667,6 +1670,9 @@ function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfPr
         .filter((block) => block.playerId === player.id)
         .sort((left, right) => left.order - right.order)]));
     const blockRounds = Math.max(0, ...[...blocksByPlayer.values()].map((blocks) => blocks.length));
+    const orderedBlocks = effectiveHoleBlockOrder(project, hole)
+        .map((blockId) => holeBlocks.find((block) => block.id === blockId))
+        .filter(Boolean) as GolfBlock[];
     const holeSequenceIds = new Set(holeBlocks.flatMap((block) => block.sequenceIds));
     const holeSequences = project.sequences.filter((sequence) => holeSequenceIds.has(sequence.id));
     const holeDuration = holeSequences.reduce((sum, sequence) => sum + (sequence.outFrame - sequence.inFrame) / sequence.sourceFps, 0);
@@ -1686,6 +1692,20 @@ function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfPr
             return <button className={hole === number ? 'active' : count ? 'filled' : ''} onClick={() => setHole(number)} key={number}><span>{number}</span><small>{count ? `${count} Seq.` : 'leer'}</small></button>;
         })}</nav>
         <div className="hole-heading"><div><span>LOCH</span><b>{hole}</b></div><p>{holeSequences.length} Sequenzen · {formatDuration(holeDuration)} geschätzte Laufzeit</p><div className="hole-progress"><i style={{ width: `${Math.min(100, holeSequences.length / Math.max(1, project.settings.players.length * 4) * 100)}%` }} /></div><button className="secondary preview-hole-button" disabled={!holeSequences.length} onClick={() => setPreviewScope(hole)}><Play size={14} /> Loch abspielen</button></div>
+        <div className="builder-view-switch" role="group" aria-label="Ansicht für Runde bauen"><button className={builderView === 'players' ? 'active' : ''} onClick={() => setBuilderView('players')}><LayoutGrid size={14} /> Nach Spielern</button><button className={builderView === 'order' ? 'active' : ''} onClick={() => setBuilderView('order')}><ListOrdered size={14} /> Wahre Reihenfolge</button><span>{builderView === 'order' ? 'Diese Reihenfolge steuert Vorschau und Export.' : 'Schläge und Material je Spieler bearbeiten.'}</span></div>
+        {builderView === 'order' && <section className="true-order-board"><header><div><ListOrdered size={18} /><span><b>Wahre Schlagreihenfolge · Loch {hole}</b><small>Karten ziehen, bis sie dem tatsächlichen Spielverlauf entsprechen.</small></span></div>{hasHoleBlockOrderOverride(project, hole) && <button className="reset-player-order" onClick={() => setProject(clearHoleBlockOrderOverride(project, hole))}><RotateCcw size={12} /> Automatik wiederherstellen</button>}</header><div className="true-order-flow">{orderedBlocks.map((block, index) => {
+            const player = project.settings.players.find((item) => item.id === block.playerId);
+            const sequences = block.sequenceIds.map((id) => project.sequences.find((sequence) => sequence.id === id)).filter(Boolean) as VirtualSequence[];
+            const duration = sequences.reduce((sum, sequence) => sum + (sequence.outFrame - sequence.inFrame) / sequence.sourceFps, 0);
+            const shotNumber = strokeNumberForBlock(project, block.id);
+            const countsWithoutVideo = !sequences.length && (block.label === 'Nicht gefilmter Schlag' || block.type === 'penalty');
+            return <article draggable className={`true-order-card ${draggedBlockId === block.id ? 'dragging' : ''} ${dragOverBlockId === block.id ? 'drag-over' : ''} ${sequences.length ? 'filled' : countsWithoutVideo ? 'count-only' : 'empty'}`} key={block.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', block.id); setDraggedBlockId(block.id); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDragOverBlockId(block.id); }} onDragLeave={() => setDragOverBlockId((current) => current === block.id ? undefined : current)} onDrop={(event) => { event.preventDefault(); if (draggedBlockId) setProject(moveBlockInHoleOrder(project, hole, draggedBlockId, block.id)); setDraggedBlockId(undefined); setDragOverBlockId(undefined); }} onDragEnd={() => { setDraggedBlockId(undefined); setDragOverBlockId(undefined); }}>
+                <div className="true-order-card-top"><span className="true-order-position">{String(index + 1).padStart(2, '0')}</span><div className="true-order-player"><i>{player?.name.slice(0, 1).toUpperCase() ?? '?'}</i><span><b>{player?.name ?? 'Spieler'}</b><small>{shotNumber ? `SCHLAG ${shotNumber} / PAR ${holePar}` : 'ZWISCHENSZENE'}</small></span></div><GripVertical className="drag-handle" size={17} /></div>
+                <div className="true-order-card-body"><span>{blockLabel(block.type)}</span><h3>{block.label}</h3><p>{sequences.length ? `${sequences.length} ${sequences.length === 1 ? 'Aufnahme' : 'Aufnahmen'} · ${formatDuration(duration)}` : countsWithoutVideo ? 'Zählt ohne Videomaterial' : 'Noch ohne Aufnahme'}</p>{block.details.club && <small>{block.details.club}{block.details.distanceMeters ? ` · ${block.details.distanceMeters} m` : ''}</small>}</div>
+                <footer><button disabled={index === 0} title="Früher abspielen" onClick={() => setProject(moveBlockInHoleOrderBy(project, hole, block.id, -1))}><ArrowLeft size={13} /></button><button disabled={index === orderedBlocks.length - 1} title="Später abspielen" onClick={() => setProject(moveBlockInHoleOrderBy(project, hole, block.id, 1))}><ArrowRight size={13} /></button><span>{sequences.length ? 'IM FILM' : countsWithoutVideo ? 'ZÄHLT' : 'GEPLANT'}</span><button title="Schlagdetails bearbeiten" onClick={() => setEditingBlockId(block.id)}><Pencil size={13} /></button>{sequences[0] && <button title="Aufnahme öffnen" onClick={() => onOpenSequence(sequences[0].id)}><Play size={13} /></button>}</footer>
+            </article>;
+        })}</div><div className="true-order-hint"><GripVertical size={14} /><span><b>Drag & Drop:</b> Jede Karte ist ein Filmmoment. Die Position gilt unmittelbar für Lochvorschau, Rundenvorschau und Export.</span></div></section>}
+        {builderView === 'players' && <>
         <section className="player-order-board"><header><div><Users size={17} /><span><b>Spielreihenfolge für Loch {hole}</b><small>Für jede Schlagrunde separat festlegen · bestimmt direkt den Rohschnitt</small></span></div></header><div className="order-rows">{Array.from({ length: blockRounds }, (_, blockOrder) => {
             const blocks = project.settings.players.map((player) => blocksByPlayer.get(player.id)?.[blockOrder]).filter(Boolean);
             const labels = [...new Set(blocks.map((block) => block!.label))];
@@ -1713,7 +1733,8 @@ function RoundBuilder({ project, setProject, onOpenSequence }: { project: GolfPr
                 </article>;
             })}</div><footer className="add-block"><select value={addType} onChange={(event) => setNewTypes((current) => ({ ...current, [player.id]: event.target.value as BlockType }))}>{BLOCK_TYPES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><button onClick={() => setProject(addBlock(project, hole, player.id, addType))}><Plus size={15} /> Block hinzufügen</button></footer></section>;
         })}</div>
-        <div className="builder-note"><Clock3 size={16} /><div><b>Automatischer Rohschnitt</b><span>Die Reihenfolge läuft von Loch 1 bis {project.settings.holes}, innerhalb jedes Lochs von oben nach unten. Leere Blöcke werden übersprungen.</span></div></div>
+        </>}
+        <div className="builder-note"><Clock3 size={16} /><div><b>{builderView === 'order' ? 'Verbindliche Filmreihenfolge' : 'Automatischer Rohschnitt'}</b><span>{builderView === 'order' ? 'Die sichtbare Kartenreihenfolge wird direkt für Vorschau und Export verwendet. Leere Karten und nicht gefilmte Schläge werden beim Abspielen übersprungen.' : `Die Reihenfolge läuft von Loch 1 bis ${project.settings.holes}, innerhalb jedes Lochs von oben nach unten. Leere Blöcke werden übersprungen.`}</span></div></div>
         {previewScope !== undefined && <RoughCutPreview project={project} setProject={setProject} onlyHole={previewScope === 'round' ? undefined : previewScope} onClose={() => setPreviewScope(undefined)} onEdit={(sequenceId) => { setPreviewScope(undefined); onOpenSequence(sequenceId); }} />}
         {scorecardOpen && <ScorecardEditor project={project} setProject={setProject} onClose={() => setScorecardOpen(false)} />}
         {editingBlockId && <BlockDetailsEditor project={project} blockId={editingBlockId} setProject={setProject} onClose={() => setEditingBlockId(undefined)} />}

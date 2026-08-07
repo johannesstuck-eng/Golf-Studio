@@ -130,7 +130,7 @@ export function createDefaultBlocks(settings: ProjectSettings): GolfBlock[] {
 
 export function createProject(settings: ProjectSettings): GolfProject {
     return {
-        schemaVersion: 9,
+        schemaVersion: 10,
         settings,
         media: [],
         suggestions: [],
@@ -140,6 +140,7 @@ export function createProject(settings: ProjectSettings): GolfProject {
         overlays: [],
         shotTracers: [],
         playerOrders: [],
+        holeBlockOrders: [],
         courseData: createDefaultCourseData(settings),
         playerScores: [],
         modifiedAt: new Date().toISOString(),
@@ -237,7 +238,7 @@ export function normalizeProject(input: unknown): GolfProject {
         };
     }) : [];
     return {
-        schemaVersion: 9,
+        schemaVersion: 10,
         settings,
         media: Array.isArray(raw.media) ? raw.media : [],
         suggestions: Array.isArray(raw.suggestions) ? raw.suggestions : [],
@@ -255,6 +256,10 @@ export function normalizeProject(input: unknown): GolfProject {
         })) : [],
         shotTracers,
         playerOrders: Array.isArray(raw.playerOrders) ? raw.playerOrders : [],
+        holeBlockOrders: Array.isArray(raw.holeBlockOrders) ? raw.holeBlockOrders.map((order) => ({
+            hole: order.hole,
+            blockIds: Array.isArray(order.blockIds) ? order.blockIds.filter((blockId) => blocks.some((block) => block.id === blockId && block.hole === order.hole)) : [],
+        })) : [],
         courseData,
         playerScores: Array.isArray(raw.playerScores) ? raw.playerScores : [],
         modifiedAt: raw.modifiedAt ?? new Date().toISOString(),
@@ -329,7 +334,7 @@ export function upsertSequence(project: GolfProject, draft: SequenceDraft): Golf
     };
     return {
         ...project,
-        schemaVersion: 9,
+        schemaVersion: 10,
         blocks,
         sequences: oldSequence
             ? project.sequences.map((item) => item.id === sequenceId ? sequence : item)
@@ -410,7 +415,7 @@ export function setSequenceCameraRange(project: GolfProject, sequenceId: string,
     const now = new Date().toISOString();
     return {
         ...project,
-        schemaVersion: 9,
+        schemaVersion: 10,
         sequences: project.sequences.map((item) => item.id === sequenceId ? { ...item, activeMediaId: mediaId, videoCuts: cuts, review: { status: 'unreviewed', reviewedFingerprint: null }, updatedAt: now } : item),
         shotTracers,
         modifiedAt: now,
@@ -566,21 +571,83 @@ export function moveSequence(project: GolfProject, blockId: string, sequenceId: 
     return touch(project, project.blocks.map((item) => item.id === blockId ? { ...item, sequenceIds } : item));
 }
 
+function legacyHoleBlockOrder(project: GolfProject, hole: number): string[] {
+    const lanes = new Map(project.settings.players.map((player) => [player.id, project.blocks
+        .filter((block) => block.hole === hole && block.playerId === player.id)
+        .sort((left, right) => left.order - right.order)]));
+    const longestLane = Math.max(0, ...[...lanes.values()].map((lane) => lane.length));
+    const result: string[] = [];
+    for (let blockIndex = 0; blockIndex < longestLane; blockIndex += 1) {
+        for (const playerId of effectivePlayerOrder(project, hole, blockIndex)) {
+            const block = lanes.get(playerId)?.[blockIndex];
+            if (block) result.push(block.id);
+        }
+    }
+    return result;
+}
+
+export function effectiveHoleBlockOrder(project: GolfProject, hole: number): string[] {
+    const fallback = legacyHoleBlockOrder(project, hole);
+    const validIds = new Set(project.blocks.filter((block) => block.hole === hole).map((block) => block.id));
+    const stored = (project.holeBlockOrders ?? []).find((order) => order.hole === hole)?.blockIds ?? [];
+    const explicit = [...new Set(stored.filter((blockId) => validIds.has(blockId)))];
+    return [...explicit, ...fallback.filter((blockId) => !explicit.includes(blockId))];
+}
+
+export function hasHoleBlockOrderOverride(project: GolfProject, hole: number): boolean {
+    return (project.holeBlockOrders ?? []).some((order) => order.hole === hole);
+}
+
+export function clearHoleBlockOrderOverride(project: GolfProject, hole: number): GolfProject {
+    return {
+        ...project,
+        schemaVersion: 10,
+        holeBlockOrders: (project.holeBlockOrders ?? []).filter((order) => order.hole !== hole),
+        modifiedAt: new Date().toISOString(),
+    };
+}
+
+function storeHoleBlockOrder(project: GolfProject, hole: number, blockIds: string[]): GolfProject {
+    const current = project.holeBlockOrders ?? [];
+    const exists = current.some((order) => order.hole === hole);
+    return {
+        ...project,
+        schemaVersion: 10,
+        holeBlockOrders: exists
+            ? current.map((order) => order.hole === hole ? { hole, blockIds } : order)
+            : [...current, { hole, blockIds }],
+        modifiedAt: new Date().toISOString(),
+    };
+}
+
+export function moveBlockInHoleOrder(project: GolfProject, hole: number, blockId: string, targetBlockId: string): GolfProject {
+    if (blockId === targetBlockId) return project;
+    const blockIds = effectiveHoleBlockOrder(project, hole);
+    const from = blockIds.indexOf(blockId);
+    const target = blockIds.indexOf(targetBlockId);
+    if (from < 0 || target < 0) return project;
+    const reordered = blockIds.filter((id) => id !== blockId);
+    const targetAfterRemoval = reordered.indexOf(targetBlockId);
+    reordered.splice(from < target ? targetAfterRemoval + 1 : targetAfterRemoval, 0, blockId);
+    return storeHoleBlockOrder(project, hole, reordered);
+}
+
+export function moveBlockInHoleOrderBy(project: GolfProject, hole: number, blockId: string, direction: -1 | 1): GolfProject {
+    const blockIds = effectiveHoleBlockOrder(project, hole);
+    const index = blockIds.indexOf(blockId);
+    const target = blockIds[index + direction];
+    return target ? moveBlockInHoleOrder(project, hole, blockId, target) : project;
+}
+
 export function roughCutSequenceIds(project: GolfProject, onlyHole?: number): string[] {
     const holes = onlyHole
         ? [onlyHole]
         : Array.from({ length: project.settings.holes }, (_, index) => index + 1);
     const result: string[] = [];
     for (const hole of holes) {
-        const lanes = new Map(project.settings.players.map((player) => [player.id, project.blocks
-            .filter((block) => block.hole === hole && block.playerId === player.id)
-            .sort((left, right) => left.order - right.order)]));
-        const longestLane = Math.max(0, ...[...lanes.values()].map((lane) => lane.length));
-        for (let blockIndex = 0; blockIndex < longestLane; blockIndex += 1) {
-            for (const playerId of effectivePlayerOrder(project, hole, blockIndex)) {
-                const block = lanes.get(playerId)?.[blockIndex];
-                if (block) result.push(...block.sequenceIds);
-            }
+        for (const blockId of effectiveHoleBlockOrder(project, hole)) {
+            const block = project.blocks.find((item) => item.id === blockId);
+            if (block) result.push(...block.sequenceIds);
         }
     }
     return result.filter((sequenceId) => project.sequences.some((sequence) => sequence.id === sequenceId));
@@ -597,7 +664,7 @@ export function toggleSequenceOverlay(project: GolfProject, sequenceId: string, 
             endFrame: sequence.outFrame - sequence.inFrame,
             position: type === 'hole-info' ? 'top-right' as const : type === 'score-card' ? 'top-left' as const : 'bottom-left' as const,
         }];
-    return { ...project, schemaVersion: 9, overlays, modifiedAt: new Date().toISOString() };
+    return { ...project, schemaVersion: 10, overlays, modifiedAt: new Date().toISOString() };
 }
 
 function defaultShotTracer(sequence: GolfProject['sequences'][number]): ShotTracerEffect {
@@ -625,7 +692,7 @@ export function toggleShotTracer(project: GolfProject, sequenceId: string): Golf
     const shotTracers = existing
         ? project.shotTracers.map((tracer) => tracer.id === existing.id ? { ...tracer, enabled: !tracer.enabled } : tracer)
         : [...project.shotTracers, defaultShotTracer(sequence)];
-    return { ...project, schemaVersion: 9, shotTracers, modifiedAt: new Date().toISOString() };
+    return { ...project, schemaVersion: 10, shotTracers, modifiedAt: new Date().toISOString() };
 }
 
 export function updateShotTracer(project: GolfProject, sequenceId: string, patch: Partial<Omit<ShotTracerEffect, 'id' | 'sequenceId'>>): GolfProject {
@@ -653,7 +720,7 @@ export function updateShotTracer(project: GolfProject, sequenceId: string, patch
     };
     return {
         ...project,
-        schemaVersion: 9,
+        schemaVersion: 10,
         shotTracers: project.shotTracers.map((item) => item.id === tracer.id ? updated : item),
         modifiedAt: new Date().toISOString(),
     };
@@ -851,7 +918,9 @@ export function hasPlayerOrderOverride(project: GolfProject, hole: number, block
 export function clearPlayerOrderOverride(project: GolfProject, hole: number, blockOrder: number): GolfProject {
     return {
         ...project,
+        schemaVersion: 10,
         playerOrders: project.playerOrders.filter((order) => order.hole !== hole || order.blockOrder !== blockOrder),
+        holeBlockOrders: (project.holeBlockOrders ?? []).filter((order) => order.hole !== hole),
         modifiedAt: new Date().toISOString(),
     };
 }
@@ -866,7 +935,13 @@ export function movePlayerInOrder(project: GolfProject, hole: number, blockOrder
     const playerOrders = exists
         ? project.playerOrders.map((order) => order.hole === hole && order.blockOrder === blockOrder ? { ...order, playerIds } : order)
         : [...project.playerOrders, { hole, blockOrder, playerIds }];
-    return { ...project, schemaVersion: 9, playerOrders, modifiedAt: new Date().toISOString() };
+    return {
+        ...project,
+        schemaVersion: 10,
+        playerOrders,
+        holeBlockOrders: (project.holeBlockOrders ?? []).filter((order) => order.hole !== hole),
+        modifiedAt: new Date().toISOString(),
+    };
 }
 
 const start = (media: MediaItem) => Date.parse(media.recordedAt);
@@ -928,7 +1003,7 @@ export function setMulticamSyncOffsets(project: GolfProject, groupId: string, of
         syncStatus,
         syncOffsetsSeconds: { ...(item.syncOffsetsSeconds ?? {}), ...validOffsets },
     } : item);
-    const next = { ...project, schemaVersion: 9, groups, modifiedAt: now };
+    const next = { ...project, schemaVersion: 10, groups, modifiedAt: now };
     return {
         ...next,
         sequences: next.sequences.map((sequence) => sequence.sourceType === 'group' && sequence.sourceId === groupId ? {
